@@ -247,7 +247,11 @@
 #define IDC_GOTO_PAGE               3040
 
 // IDD_ABOUT
-#define IDC_ABOUT_TEXT              3070
+// 3071, not 3070: IDC_EDIT already owns 3070. Control IDs in different dialogs
+// need not be unique, but this header promises disjoint ranges and keeping that
+// promise is what lets a duplicate be found by grep rather than by a misbehaving
+// dialog.
+#define IDC_ABOUT_TEXT              3071
 
 // IDD_PRINTPREVIEW
 #define IDC_PP_PREVIEW              3050

@@ -71,7 +71,11 @@ void ActivateExistingDialog()
 // this" a two-keystroke operation, and it is the behaviour users expect.
 void SeedFromSelection(AppFrame& frame)
 {
-    g_find.find[0] = L'\0';
+    // Do NOT clear g_find.find here. The buffer is only overwritten once the
+    // selection has passed every check below, so an empty selection, an
+    // over-long one, or a multi-line one preserves the previous needle -- which
+    // is what "open Find again with just a caret" must mean. Clearing first
+    // would silently discard the user's last search.
     if (!frame.View()) return;
 
     CHARRANGE sel;
@@ -132,7 +136,13 @@ void PerformAction()
         // fall through to FR_FINDNEXT: WordPad advances after replacing
     }
 
-    if (flags & FR_FINDNEXT)
+    // The common dialog sets exactly ONE action flag per notification, so a
+    // Replace click arrives with FR_REPLACE and no FR_FINDNEXT. Advancing after
+    // a replace is nonetheless the expected behaviour (it is what WordPad does
+    // and what the dialog's own layout implies), so the search block runs for
+    // both flags. Without FR_REPLACE here the user would have to click Find Next
+    // between every Replace.
+    if (flags & (FR_FINDNEXT | FR_REPLACE))
     {
         CHARRANGE found;
         if (frame->View().FindText(g_find.find, matchCase, wholeWord,
@@ -164,6 +174,8 @@ void PerformAction()
 // ===========================================================================
 
 UINT FindReplace_RegisteredMessage() { return g_find.msgFind; }
+
+HWND FindReplace_DialogHwnd() { return g_find.hDlg; }
 
 // Called from FrameWndProc's default branch. Returns true when the message was
 // the Find/Replace notification and has been handled.
@@ -344,32 +356,63 @@ bool ShowGoToPage(AppFrame& frame)
     LONG pageTwipsH = 11 * kTwipsPerInch;
     PageGeometryTwips(frame, &pageTwipsW, &pageTwipsH);
 
-    RECT rcPagePx;
-    rcPagePx.left   = 0;
-    rcPagePx.top    = 0;
-    rcPagePx.right  = MulDiv(pageTwipsW, dpiX, kTwipsPerInch);
-    rcPagePx.bottom = MulDiv(pageTwipsH, dpiY, kTwipsPerInch);
+    // FORMATRANGE rectangles are in TWIPS, and the body rectangle is the page
+    // minus the page-setup margins. Passing device pixels here would shrink the
+    // page roughly fifteenfold and report absurd page counts; ignoring the
+    // margins would make the on-screen page breaks disagree with the printed
+    // ones, which is the whole point of Go To.
+    const PageSetup& ps = frame.Settings().page;
+    RECT rcPage = { 0, 0, pageTwipsW, pageTwipsH };
+    RECT rcBody;
+    rcBody.left   = ps.marginLeft;
+    rcBody.top    = ps.marginTop;
+    rcBody.right  = pageTwipsW - ps.marginRight;
+    rcBody.bottom = pageTwipsH - ps.marginBottom;
+    if (rcBody.right  <= rcBody.left)  rcBody.right  = rcBody.left + 1;
+    if (rcBody.bottom <= rcBody.top)   rcBody.bottom = rcBody.top + 1;
+
+    // Real character count, for two reasons: -1 would make the loop guard
+    // (0 < -1) false so no page after the first could ever be reached, and the
+    // end-of-text comparison below needs the true end to know when the last
+    // page has been measured.
+    LONG textLen = EditTextLengthExact(frame.View().Hwnd());
 
     FORMATRANGE fr = {};
-    fr.hdc      = hdc;
-    fr.hdcTarget = hdc;
-    fr.rc       = rcPagePx;
-    fr.rcPage   = rcPagePx;
+    fr.hdc        = hdc;
+    fr.hdcTarget  = hdc;
+    fr.rc         = rcBody;
+    fr.rcPage     = rcPage;
     fr.chrg.cpMin = 0;
-    fr.chrg.cpMax = -1;
+    fr.chrg.cpMax = textLen;
 
-    LONG next = 0;
-    int page = 1;
-    // Bounded loop: a corrupt or enormous document must not spin here. The bound
-    // is the requested page plus a margin, so the common case exits early.
-    while (page < ctx.page && fr.chrg.cpMin < fr.chrg.cpMax)
+    // Walk pages until the requested one begins or the document runs out.
+    int  page = 1;
+    LONG targetStart = 0;
+    bool found = (ctx.page == 1);
+
+    while (!found && fr.chrg.cpMin < fr.chrg.cpMax)
     {
-        next = static_cast<LONG>(SendMessageW(frame.View().Hwnd(), EM_FORMATRANGE,
-                                              FALSE, LParamFromPtr(&fr)));
+        LONG next = static_cast<LONG>(SendMessageW(frame.View().Hwnd(), EM_FORMATRANGE,
+                                                   FALSE, LParamFromPtr(&fr)));
         if (next <= fr.chrg.cpMin)
             break;                  // no progress; stop rather than loop forever
+
+        bool wasLast = (next >= textLen);
         fr.chrg.cpMin = next;
         ++page;
+
+        // EM_FORMATRANGE returns the text length for the final page, so `next`
+        // reaching the end means the page just measured was the last one and no
+        // page `page` exists. Checking that BEFORE accepting page == ctx.page is
+        // what stops a one-page document from "successfully" going to page 2.
+        if (wasLast)
+            break;
+
+        if (page == ctx.page)
+        {
+            found = true;
+            targetStart = next;
+        }
     }
 
     // wParam FALSE means nothing was drawn, but RichEdit still caches the
@@ -378,16 +421,18 @@ bool ShowGoToPage(AppFrame& frame)
     SendMessageW(frame.View().Hwnd(), EM_FORMATRANGE, FALSE, 0);
     ReleaseDC(frame.View().Hwnd(), hdc);
 
-    if (page < ctx.page)
+    if (!found)
     {
+        int totalPages = page - 1;
+        if (totalPages < 1) totalPages = 1;
         WCHAR msg[128];
         StrPrintf(msg, _countof(msg),
-                  L"The document has only %d page(s).", page);
+                  L"The document has only %d page(s).", totalPages);
         frame.SetStatusMessage(msg);
         return false;
     }
 
-    CHARRANGE target = { next, next };
+    CHARRANGE target = { targetStart, targetStart };
     frame.View().SetSel(target);
     SendMessageW(frame.View().Hwnd(), EM_SCROLLCARET, 0, 0);
     SetFocus(frame.View().Hwnd());

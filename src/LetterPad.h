@@ -35,6 +35,13 @@
 #define LP_REGISTRY_KEY     L"Software\\LetterPad"
 #define LP_MRU_KEY          L"Software\\LetterPad\\Recent File List"
 
+// Maximum path buffer for the common dialogs. 32767 characters is the Win32
+// path ceiling for a longPathAware process; MAX_PATH (260) would silently
+// truncate exactly the paths the manifest declaration exists to support. Kept
+// as a named constant because four dialog sites share it and a silent
+// truncation in any of them addresses the wrong file.
+constexpr size_t kMaxPathBuffer = 32767;
+
 // ----------------------------------------------------------------------------
 //  Globals (defined in main.cpp)
 // ----------------------------------------------------------------------------
@@ -212,8 +219,14 @@ void  Settings_ApplyDefaults(AppSettings* s);
 // jump list against this key the numbering is familiar.
 constexpr int kMruMax = 9;
 void  Mru_Add(PCWSTR path);
-int   Mru_GetList(PWSTR paths[kMruMax]);   // returns count, most recent first
+int   Mru_GetList(std::wstring paths[kMruMax]);   // returns count, most recent first
 void  Mru_Clear();
+
+// Exact character count of a RichEdit document, for use as a pagination bound.
+// WM_GETTEXTLENGTH is wrong here: it can report CRLF pairs where RichEdit stores
+// a single CR, which would make the bound too large and let a pagination loop
+// run one page past the end. GTL_PRECISE asks RichEdit for its own count.
+LONG  EditTextLengthExact(HWND hEdit);
 
 // ----------------------------------------------------------------------------
 //  File formats
@@ -377,7 +390,7 @@ public:
     bool ConfirmSaveIfDirty();              // true = OK to proceed
 
     void   SetDocumentPath(PCWSTR path);    // null clears it
-    PCWSTR DocumentPath() const { return m_path; }
+    PCWSTR DocumentPath() const { return m_path.c_str(); }
     void   UpdateCaption();
     void   UpdateRibbonState();             // refresh every enabled/checked state
     void   UpdateStatusBar();
@@ -445,8 +458,13 @@ private:
     ComPtr<IUIApplication> m_pApplication;
     bool  m_fRibbon        = false;
 
-    WCHAR m_path[MAX_PATH] = {};    // full path, or empty for an untitled doc
-    WCHAR m_title[MAX_PATH] = {};   // display name only
+    // std::wstring rather than WCHAR[MAX_PATH]. This process declares itself
+    // longPathAware, and a truncated path is not cosmetic: a truncated save
+    // target or temp name addresses the WRONG file. Fixed MAX_PATH buffers
+    // survived only where an API imposes them; the dialog buffers are sized to
+    // the 32k path limit instead (kMaxPathBuffer).
+    std::wstring m_path;    // full path, or empty for an untitled doc
+    std::wstring m_title;   // display name (path leaf) only
 
     int   m_cyRibbon       = 0;     // ribbon height, queried on WM_SIZE
     int   m_cyRuler        = 0;
@@ -477,6 +495,10 @@ void PageGeometryTwips(const AppFrame& frame, LONG* cxTwips, LONG* cyTwips);
 // findrep.cpp
 bool ShowFindDialog(AppFrame& frame, bool replace);
 bool ShowGoToPage(AppFrame& frame);
+// The modeless Find/Replace dialog, or null when none is open. The main message
+// loop must feed it to IsDialogMessageW so that Tab, Enter and Escape work
+// inside it; a modeless common dialog receives no keyboard handling otherwise.
+HWND FindReplace_DialogHwnd();
 // Handles the registered FINDMSGSTRING notification. Called from FrameWndProc's
 // default branch, which is the only place that can see messages outside the
 // known set. Returns true when the message was consumed.

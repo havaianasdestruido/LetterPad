@@ -63,6 +63,24 @@ int DipToPx(int dip)
     return MulDiv(dip, dpi, 96);
 }
 
+// ---------------------------------------------------------------------------
+//  Link scheme allowlist
+//
+//  The text of a hyperlink arrives from the opened document, which is untrusted
+//  input. Passing it unchecked to ShellExecuteW with the "open" verb lets a
+//  crafted RTF launch anything the shell can resolve: a UNC path that triggers
+//  an SMB credential handshake, file:///.../payload.hta, or any protocol a
+//  third-party program registered. Restricting to the schemes a word processor
+//  legitimately links to removes that whole class with no loss of function.
+// ---------------------------------------------------------------------------
+bool IsSafeLinkScheme(PCWSTR url)
+{
+    if (!url) return false;
+    return _wcsnicmp(url, L"http://",  7) == 0 ||
+           _wcsnicmp(url, L"https://", 8) == 0 ||
+           _wcsnicmp(url, L"mailto:",  7) == 0;
+}
+
 // The GWLP_USERDATA slot holds the AppFrame*. Every message that needs object
 // context recovers it through here rather than through a map, because there is
 // one frame per window and the lookup must be O(1) on every WM_PAINT.
@@ -317,11 +335,11 @@ bool AppFrame::InitRibbon()
     // fall back. Ribbon.dll is Windows 7+; on anything older this returns
     // REGDB_E_CLASSNOTREG.
     HRESULT hr = CoCreateInstance(CLSID_UIRibbonFramework, nullptr, CLSCTX_INPROC_SERVER,
-                                  IID_PPV_ARGS(m_pFramework.Put()));
+                                  IID_PPV_ARGS(m_pFramework.Adopt()));
     if (FAILED(hr) || !m_pFramework)
         return false;
 
-    hr = RibbonApp_Create(m_pFramework.Get(), this, m_pApplication.Put());
+    hr = RibbonApp_Create(m_pFramework.Get(), this, m_pApplication.Adopt());
     if (FAILED(hr) || !m_pApplication)
     {
         m_pFramework = nullptr;
@@ -547,13 +565,16 @@ void AppFrame::LayoutChildren()
 
     if (m_hRuler)
     {
-        // The ruler shows the text area and the indent markers, so it needs the
-        // current paragraph formatting and the page width.
+        // The ruler shows the page measure and the indent markers, so it needs
+        // the current paragraph formatting and the CONFIGURED page width -- not
+        // the edit control's client width, which changes on every resize and
+        // would make the margin bands drift away from page setup.
         PARAFORMAT2 pf;
         m_view.GetParaFormat(pf);
         RECT rcText = { 0, 0, cx, m_cyRuler };
-        Ruler_SetMetrics(m_hRuler, m_settings, rcText, pf,
-                         m_view.GetTextWidthTwips());
+        LONG pageW = 0, pageH = 0;
+        PageGeometryTwips(*this, &pageW, &pageH);
+        Ruler_SetMetrics(m_hRuler, m_settings, rcText, pf, pageW);
         Ruler_Invalidate(m_hRuler);
     }
 }
@@ -570,12 +591,20 @@ void AppFrame::ApplyWrapMode()
 // ===========================================================================
 void AppFrame::ApplySettings(const AppSettings& s)
 {
-    m_settings = s;
-    // PageSetup_Copy deep-copies the DEVMODE/DEVNAMES handles. Assigning the
-    // struct directly would leave two PageSetup objects owning one HGLOBAL, and
-    // the second PageSetup_Free would double-free it.
-    PageSetup_Free(&m_settings.page);
-    PageSetup_Copy(&m_settings.page, &s.page);
+    // AppSettings's implicit assignment copies the page HGLOBALs SHALLOWLY. The
+    // obvious "assign, then fix up the handles" order therefore freed the
+    // source's live handles and deep-copied from freed memory. The correct
+    // order is: free OUR old handles, take the scalar fields, null the copied
+    // handles so that only one owner exists at any instant, then deep-copy.
+    // Self-assignment is guarded because callers legitimately pass m_settings.
+    if (&s != &m_settings)
+    {
+        PageSetup_Free(&m_settings.page);
+        m_settings = s;
+        m_settings.page.hDevMode  = nullptr;
+        m_settings.page.hDevNames = nullptr;
+        PageSetup_Copy(&m_settings.page, &s.page);
+    }
 
     if (m_view)
     {
@@ -583,10 +612,21 @@ void AppFrame::ApplySettings(const AppSettings& s)
         SetZoomPercent(m_settings.nZoomNum * 100 / (m_settings.nZoomDen ? m_settings.nZoomDen : 100));
     }
 
+    // The Options dialog can toggle the ruler and status bar, and can do so on a
+    // frame where they were never created. Showing a null window is a silent
+    // no-op, so creation has to happen here too -- and the layout heights must
+    // follow, or LayoutChildren leaves a blank band where a hidden bar was.
+    if (m_settings.fShowRuler && !m_hRuler)
+        CreateRuler();
     if (m_hRuler)
         ShowWindow(m_hRuler, m_settings.fShowRuler ? SW_SHOW : SW_HIDE);
+    m_cyRuler = m_settings.fShowRuler ? DipToPx(kRulerHeightDip) : 0;
+
+    if (m_settings.fShowStatusBar && !m_hStatus)
+        CreateStatusBar();
     if (m_hStatus)
         ShowWindow(m_hStatus, m_settings.fShowStatusBar ? SW_SHOW : SW_HIDE);
+    m_cyStatus = m_settings.fShowStatusBar ? DipToPx(kStatusHeightDip) : 0;
 
     LayoutChildren();
     UpdateRibbonState();
@@ -595,6 +635,12 @@ void AppFrame::ApplySettings(const AppSettings& s)
 void AppFrame::SaveSettingsTo(AppSettings& s) const
 {
     s = m_settings;
+    // The assignment above copied the page HGLOBALs shallowly. Null them in the
+    // copy immediately so that the deep-copy at the end of this function, and
+    // the caller's eventual PageSetup_Free(&s), operate on handles owned solely
+    // by s -- never on ones that still belong to m_settings.
+    s.page.hDevMode  = nullptr;
+    s.page.hDevNames = nullptr;
 
     // Capture the live geometry rather than the last-saved rectangle, so a
     // window the user resized but never re-saved still reopens correctly.
@@ -616,7 +662,9 @@ void AppFrame::SaveSettingsTo(AppSettings& s) const
     if (m_view)
         m_view.GetZoom(s.nZoomNum, s.nZoomDen);
 
-    PageSetup_Free(&s.page);
+    // Deep-copy the page setup into s. s.page's handles were nulled right after
+    // the shallow assignment above, so this copy makes s the sole owner of what
+    // it allocates and the caller's PageSetup_Free(&s) is then correct.
     PageSetup_Copy(&s.page, &m_settings.page);
 }
 
@@ -632,7 +680,7 @@ bool AppFrame::ConfirmSaveIfDirty()
     WCHAR title[MAX_PATH + 64];
     LoadStr(IDS_ERR_UNSAVED_CAP, title, _countof(title));
 
-    PCWSTR name = m_title[0] ? m_title : nullptr;
+    PCWSTR name = m_title.empty() ? nullptr : m_title.c_str();
     if (!name)
     {
         WCHAR untitled[128];
@@ -693,7 +741,7 @@ bool AppFrame::FileOpen(PCWSTR path)
 {
     if (!ConfirmSaveIfDirty()) return false;
 
-    WCHAR buf[MAX_PATH] = {};
+    WCHAR buf[kMaxPathBuffer] = {};   // see kMaxPathBuffer in LetterPad.h
 
     if (path && path[0])
     {
@@ -713,7 +761,7 @@ bool AppFrame::FileOpen(PCWSTR path)
         ofn.lpstrFilter = filter;
         ofn.nFilterIndex = 1;
         ofn.lpstrFile   = buf;
-        ofn.nMaxFile    = _countof(buf);
+        ofn.nMaxFile    = static_cast<DWORD>(_countof(buf));
         ofn.lpstrTitle  = L"Open";
         // OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST make the dialog reject typos
         // itself, which is both less code here and a better error message.
@@ -778,14 +826,14 @@ bool AppFrame::FileSave()
     // FileSaveAs (rather than true) is important: the caller uses the return
     // value to decide whether to close the window, and a cancelled Save As must
     // not look like a successful save.
-    if (!m_path[0])
+    if (m_path.empty())
         return FileSaveAs();
 
-    FileFormat fmt = DetectFormatByExtension(m_path);
+    FileFormat fmt = DetectFormatByExtension(m_path.c_str());
     if (!FormatIsImplemented(fmt))
         return FileSaveAs();       // cannot write this format; offer a choice
 
-    HRESULT hr = Document_Save(m_view.Hwnd(), m_path, fmt);
+    HRESULT hr = Document_Save(m_view.Hwnd(), m_path.c_str(), fmt);
     if (FAILED(hr))
     {
         ShowFatalError(m_hFrame, IDS_ERR_SAVEFILE, IDS_ERR_SAVEFILE_CAP, hr);
@@ -793,7 +841,7 @@ bool AppFrame::FileSave()
     }
 
     m_view.SetModified(false);
-    Mru_Add(m_path);
+    Mru_Add(m_path.c_str());
     UpdateCaption();
     UpdateStatusBar();
     return true;
@@ -801,11 +849,11 @@ bool AppFrame::FileSave()
 
 bool AppFrame::FileSaveAs(FileFormat force)
 {
-    WCHAR buf[MAX_PATH] = {};
+    WCHAR buf[kMaxPathBuffer] = {};   // see kMaxPathBuffer in LetterPad.h
     FileFormat chosen = force;
 
-    if (m_path[0])
-        wcsncpy_s(buf, _countof(buf), m_path, _TRUNCATE);
+    if (!m_path.empty())
+        wcsncpy_s(buf, _countof(buf), m_path.c_str(), _TRUNCATE);
 
     if (chosen == FileFormat::Unknown)
     {
@@ -818,7 +866,7 @@ bool AppFrame::FileSaveAs(FileFormat force)
         ofn.lpstrFilter  = filter;
         ofn.nFilterIndex = 1;
         ofn.lpstrFile    = buf;
-        ofn.nMaxFile     = _countof(buf);
+        ofn.nMaxFile     = static_cast<DWORD>(_countof(buf));
         ofn.lpstrTitle   = L"Save As";
         // Preselect the filter that matches the document's current format, so
         // saving an already-open .txt does not silently offer RTF as the
@@ -879,7 +927,9 @@ bool AppFrame::FileSaveAs(FileFormat force)
 
 bool AppFrame::FileClose()
 {
-    if (!ConfirmSaveIfDirty()) return false;
+    // The WM_CLOSE handler owns the save prompt. Prompting here as well would
+    // ask twice whenever the user answers "No", because the document is still
+    // dirty when the handler runs.
     PostMessageW(m_hFrame, WM_CLOSE, 0, 0);
     return true;
 }
@@ -888,17 +938,17 @@ void AppFrame::SetDocumentPath(PCWSTR path)
 {
     if (path && path[0])
     {
-        wcsncpy_s(m_path, _countof(m_path), path, _TRUNCATE);
+        m_path = path;
         // Display name is the leaf, not the full path: the caption reads
         // "notes.rtf - LetterPad", matching the original, and the tooltip /
         // status bar carries the full path for anyone who needs it.
-        PCWSTR leaf = PathFindFileNameW(m_path);
-        wcsncpy_s(m_title, _countof(m_title), leaf ? leaf : m_path, _TRUNCATE);
+        PCWSTR leaf = PathFindFileNameW(m_path.c_str());
+        m_title = (leaf && leaf[0]) ? leaf : m_path;
     }
     else
     {
-        m_path[0]  = L'\0';
-        m_title[0] = L'\0';
+        m_path.clear();
+        m_title.clear();
     }
 }
 
@@ -907,8 +957,8 @@ void AppFrame::UpdateCaption()
     WCHAR cap[MAX_PATH + 128] = {};
     WCHAR name[MAX_PATH + 32];
 
-    if (m_title[0])
-        wcsncpy_s(name, _countof(name), m_title, _TRUNCATE);
+    if (!m_title.empty())
+        wcsncpy_s(name, _countof(name), m_title.c_str(), _TRUNCATE);
     else
         LoadStr(IDS_UNTITLED, name, _countof(name));
 
@@ -1090,7 +1140,9 @@ void AppFrame::OnEditSelChange()
         RECT rc;
         GetClientRect(m_hFrame, &rc);
         RECT rcText = { 0, 0, rc.right, m_cyRuler };
-        Ruler_SetMetrics(m_hRuler, m_settings, rcText, pf, m_view.GetTextWidthTwips());
+        LONG pageW = 0, pageH = 0;
+        PageGeometryTwips(*this, &pageW, &pageH);
+        Ruler_SetMetrics(m_hRuler, m_settings, rcText, pf, pageW);
         Ruler_Invalidate(m_hRuler);
     }
 }
@@ -1271,13 +1323,13 @@ void AppFrame::OnInsertPicture()
         L"Metafiles\0*.wmf;*.emf\0"
         L"All Files\0*.*\0\0";
 
-    WCHAR buf[MAX_PATH] = {};
+    WCHAR buf[kMaxPathBuffer] = {};   // see kMaxPathBuffer in LetterPad.h
     OPENFILENAMEW ofn = {};
     ofn.lStructSize  = sizeof(ofn);
     ofn.hwndOwner    = m_hFrame;
     ofn.lpstrFilter  = kPicFilter;
     ofn.lpstrFile    = buf;
-    ofn.nMaxFile     = _countof(buf);
+    ofn.nMaxFile     = static_cast<DWORD>(_countof(buf));
     ofn.lpstrTitle   = L"Insert Picture";
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ENABLESIZING;
 
@@ -1300,16 +1352,20 @@ void AppFrame::ShowOptionsDialog()
     // discards everything, including the font preview the user may have applied
     // to the live document to see how it looked.
     AppSettings draft = m_settings;
-    PageSetup_Free(&draft.page);
+    // Null before copying: the assignment above already copied m_settings'
+    // live handles into draft, and freeing them (as an earlier draft did) would
+    // release handles m_settings is still using.
+    draft.page.hDevMode  = nullptr;
+    draft.page.hDevNames = nullptr;
     PageSetup_Copy(&draft.page, &m_settings.page);
 
     if (::ShowOptionsDialog(m_hFrame, draft) == IDOK)
     {
         PageSetup_Free(&m_settings.page);
         m_settings = draft;
-        // m_settings now owns the HGLOBALs draft was holding. Nulling them in
-        // draft is what makes the else-branch's PageSetup_Free(&draft) safe, and
-        // keeps ownership unambiguous if an error path is added later.
+        // Ownership of the HGLOBALs moved into m_settings with the assignment.
+        // Nulling them in draft leaves it owning nothing, so its teardown is a
+        // no-op and no handle has two owners at any instant.
         draft.page.hDevMode  = nullptr;
         draft.page.hDevNames = nullptr;
 
@@ -1328,7 +1384,10 @@ void AppFrame::ShowOptionsDialog()
     }
     else
     {
-        PageSetup_Free(&draft);
+        // Cancelled. draft owns its deep-copied page setup and m_settings'
+        // handles were never touched, so releasing draft's is both necessary
+        // and sufficient.
+        PageSetup_Free(&draft.page);
     }
 }
 
@@ -1413,8 +1472,13 @@ LRESULT CALLBACK EditSubclassProc(HWND hEdit, UINT msg, WPARAM wp, LPARAM lp,
         // unsigned int makes every scroll direction "down".
         int delta = GET_WHEEL_DELTA_WPARAM(wp);
         int steps = delta / WHEEL_DELTA;
-        while (steps-- > 0) frame->View().ZoomIn();
-        while (steps++ < 0) frame->View().ZoomOut();
+        // Two independent bounded loops. The earlier post-decrement pair mutated
+        // `steps` in the first loop and then re-tested it in the second, so a
+        // single notch zoomed in and immediately back out (net zero), and a
+        // sub-notch delta from a high-resolution wheel zoomed OUT on every
+        // scroll in either direction.
+        for (int i = 0; i < steps; ++i)  frame->View().ZoomIn();
+        for (int i = 0; i > steps; --i)  frame->View().ZoomOut();
         frame->SyncZoomFromView();
         return 0;      // consumed: do not also scroll
     }
@@ -1574,11 +1638,15 @@ LRESULT CALLBACK FrameWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                         tr.chrg = el->chrg;
                         tr.lpstrText = &buf[0];
                         if (SendMessageW(frame->View().Hwnd(), EM_GETTEXTRANGE, 0,
-                                         LParamFromPtr(&tr)) > 0)
+                                         LParamFromPtr(&tr)) > 0 &&
+                            IsSafeLinkScheme(buf.c_str()))
                         {
                             // ShellExecute rather than a hand-built navigation:
                             // it respects the user's default browser, handles
-                            // mailto:, and needs no WinINet dependency.
+                            // mailto:, and needs no WinINet dependency. The
+                            // scheme allowlist is what stops a crafted document's
+                            // link text from launching a UNC path, a local file,
+                            // or an arbitrary registered protocol.
                             ShellExecuteW(frame->Hwnd(), L"open", buf.c_str(),
                                           nullptr, nullptr, SW_SHOWNORMAL);
                         }

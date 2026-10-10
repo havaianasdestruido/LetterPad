@@ -71,6 +71,9 @@ An earlier revision of this repository committed three proprietary Microsoft fil
 under `bin/` (`wordpad.exe`, `WordpadFilter.dll`, `pt-BR/wordpad.exe.mui`). Those
 files are copyright Microsoft Corporation, are covered by the Windows EULA, and are
 **not** public domain — attaching an Unlicense to a repository cannot dedicate
-someone else's proprietary binary. They have been removed from this branch's
-history. If you forked or cloned before that removal, delete your copy and
-re-clone.
+someone else's proprietary binary. They have been removed from the working
+tree on this branch. They remain reachable in earlier commits on `main` until
+that branch's history is rewritten (e.g. `git filter-repo --path bin
+--invert-paths` followed by a force-push), which is a repository-admin
+operation outside this branch's scope. If you forked or cloned before the
+working-tree removal, delete your copy and re-clone.

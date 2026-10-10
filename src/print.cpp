@@ -7,7 +7,10 @@
 //  returns the character offset where it had to stop. Printing is therefore a
 //  loop:
 //
-//      fr.chrg = { 0, -1 }                 // -1 means "to end of document"
+//      fr.chrg = { 0, textLength }          // a REAL count, not -1: the loop
+//                                           // guard compares the two fields as
+//                                           // numbers, and -1 would end the
+//                                           // loop before it starts
 //      while (fr.chrg.cpMin < fr.chrg.cpMax) {
 //          next = EM_FORMATRANGE(TRUE, &fr)   // draw one page
 //          if (next <= fr.chrg.cpMin) break   // no progress -> bail
@@ -15,6 +18,10 @@
 //          fr.chrg.cpMin = next
 //      }
 //      EM_FORMATRANGE(FALSE, 0)            // release the measurement cache
+//
+//  The rectangles in FORMATRANGE (rc and rcPage) are in TWIPS. RichEdit maps
+//  them through the target DC's LOGPIXELS; handing it device pixels yields a
+//  page an order of magnitude too small.
 //
 //  Three details that are easy to get wrong and hard to notice:
 //
@@ -108,6 +115,28 @@ POINT ShiftToPaperOrigin(HDC hdc)
     return old;
 }
 
+// ---------------------------------------------------------------------------
+//  Creates a DC for the system default printer.
+//
+//  Needed because CreateDCW with an all-null driver/device pair is not a
+//  reliable "give me the default printer" call: depending on configuration it
+//  fails outright or returns a display DC, and neither can carry a print job.
+//  Asking the spooler for the name and then opening WINSPOOL explicitly is the
+//  supported route.
+// ---------------------------------------------------------------------------
+HDC CreatePrinterDCFromDevMode(HGLOBAL hDevMode)
+{
+    WCHAR name[256] = {};
+    DWORD cch = _countof(name);
+    if (!GetDefaultPrinterW(name, &cch))
+        return nullptr;
+
+    DEVMODEW* dm = hDevMode ? static_cast<DEVMODEW*>(GlobalLock(hDevMode)) : nullptr;
+    HDC hdc = CreateDCW(L"WINSPOOL", name, nullptr, dm);
+    if (dm) GlobalUnlock(hDevMode);
+    return hdc;
+}
+
 } // anonymous namespace
 
 // ===========================================================================
@@ -129,13 +158,20 @@ void PageGeometryTwips(const AppFrame& frame, LONG* cxTwips, LONG* cyTwips)
         DEVMODEW* dm = static_cast<DEVMODEW*>(GlobalLock(ps.hDevMode));
         if (dm)
         {
-            if (dm->dmPaperWidth > 0 && dm->dmPaperLength > 0)
+            // dmPaperWidth/Length are only meaningful when the driver says it
+            // filled them in. Many drivers populate dmPaperSize (A4, Letter,
+            // ...) and leave the dimension fields zero or stale, so reading them
+            // unconditionally would silently produce a US-Letter-shaped page on
+            // an A4 printer or vice versa.
+            if ((dm->dmFields & DM_PAPERWIDTH) && (dm->dmFields & DM_PAPERLENGTH) &&
+                dm->dmPaperWidth > 0 && dm->dmPaperLength > 0)
             {
-                // dmPaperWidth/Length are in tenths of a millimetre. Converting
-                // via hundredths-of-mm arithmetic avoids a float and keeps the
-                // result exact for the standard paper sizes.
-                cx = MulDiv(dm->dmPaperWidth,  kTwipsPerInch, 2540);
-                cy = MulDiv(dm->dmPaperLength, kTwipsPerInch, 2540);
+                // dmPaperWidth/Length are in TENTHS of a millimetre, and one inch
+                // is 25.4 mm = 254 tenths. Dividing by 2540 (hundredths) would
+                // make every page exactly one tenth of its true size, which
+                // surfaces as a postage-stamp page in preview and print alike.
+                cx = MulDiv(dm->dmPaperWidth,  kTwipsPerInch, 254);
+                cy = MulDiv(dm->dmPaperLength, kTwipsPerInch, 254);
             }
             if (dm->dmFields & DM_ORIENTATION && dm->dmOrientation == DMORIENT_LANDSCAPE)
             {
@@ -183,7 +219,12 @@ bool ShowPageSetup(AppFrame& frame)
     psd.hInstance     = g_hInst;
     psd.hDevMode      = staged.hDevMode;
     psd.hDevNames     = staged.hDevNames;
-    psd.Flags         = PSD_MARGINS | PSD_INHUNDREDTHSOFINCH | PSD_ENABLEPAGESETUPHOOK;
+    // No PSD_ENABLEPAGESETUPHOOK: the flag tells the dialog to call a hook
+    // procedure through lpfnPageSetupHook, which is null here. A hook flag with
+    // a null hook makes PageSetupDlgW fail with CDERR_NOHOOK, which is
+    // indistinguishable from the user pressing Cancel -- the dialog would simply
+    // never appear.
+    psd.Flags         = PSD_MARGINS | PSD_INHUNDREDTHSOFINCH;
 
     RECT rcMin = {};
     SetRect(&rcMin, TwipsToHundredthsInch(s.page.marginLeft),
@@ -253,11 +294,12 @@ bool PrintDocument(AppFrame& frame, bool quickPrint)
         hDevNames = tmp.hDevNames;
         ownDevMode = true;
 
-        if (!hDevMode && !hDevNames)
+        if (!hDevNames)
         {
-            // Nothing stored: resolve the default printer. Passing all-nulls to
-            // CreateDC selects the default device, which is exactly quick print.
-            hdc = CreateDCW(nullptr, nullptr, nullptr, nullptr);
+            // Nothing stored, or a stored DEVMODE with no matching DEVNAMES:
+            // resolve the default printer by name. See CreatePrinterDCFromDevMode
+            // for why an all-null CreateDCW is not an acceptable substitute.
+            hdc = CreatePrinterDCFromDevMode(hDevMode);
         }
     }
     else
@@ -273,14 +315,22 @@ bool PrintDocument(AppFrame& frame, bool quickPrint)
         pd.hDevMode  = tmp.hDevMode;
         pd.hDevNames = tmp.hDevNames;
 
-        pd.Flags = PD_RETURNDC | PD_COLLATE | PD_USEDEVMODECOPIES | PD_NOSELECTION;
+        // PD_NOPAGENUMS: page-range printing is not implemented, and without the
+        // flag PrintDlgEx requires a non-null lpPageRanges with nMaxPageRanges
+        // >= 1 -- it returns E_INVALIDARG otherwise, which would make the Print
+        // command silently do nothing. PD_NOCURRENTPAGE hides the "Current page"
+        // option, which would be a promise this code cannot keep.
+        pd.Flags = PD_RETURNDC | PD_COLLATE | PD_USEDEVMODECOPIES | PD_NOSELECTION
+                 | PD_NOPAGENUMS | PD_NOCURRENTPAGE;
         pd.nCopies     = 1;
-        pd.nMinPage    = 1;
-        pd.nMaxPage    = static_cast<WORD>(0xFFFF);
         pd.nStartPage  = START_PAGE_GENERAL;
 
         HRESULT hr = PrintDlgExW(&pd);
-        if (FAILED(hr) || pd.dwResultAction == PD_RESULT_CANCEL)
+        // Three result actions exist; only PRINT means the user confirmed and
+        // wants output now. APPLY means they pressed Apply and then cancelled,
+        // and treating that as a print would put paper in the printer for a
+        // dialog the user backed out of.
+        if (FAILED(hr) || pd.dwResultAction != PD_RESULT_PRINT)
         {
             PageSetup_Free(&tmp);
             if (pd.hDC) DeleteDC(pd.hDC);
@@ -329,7 +379,18 @@ bool PrintDocument(AppFrame& frame, bool quickPrint)
         }
         DEVMODEW* dm = hDevMode ? static_cast<DEVMODEW*>(GlobalLock(hDevMode)) : nullptr;
 
-        hdc = CreateDCW(driver, device, port, dm);
+        if (device && device[0])
+        {
+            hdc = CreateDCW(driver, device, port, dm);
+        }
+        else
+        {
+            // A DEVMODE without a usable DEVNAMES device name. CreateDCW with a
+            // null device is the unreliable path described in the quick-print
+            // branch, so resolve the default printer explicitly instead.
+            if (dm) { GlobalUnlock(hDevMode); dm = nullptr; }
+            hdc = CreatePrinterDCFromDevMode(hDevMode);
+        }
 
         if (dm) GlobalUnlock(hDevMode);
         if (hDevNames) GlobalUnlock(hDevNames);
@@ -373,11 +434,34 @@ bool PrintDocument(AppFrame& frame, bool quickPrint)
         return false;
     }
 
-    // Save/restore the DC state around each page so per-page settings (fonts
-    // selected by RichEdit, clipping regions) cannot leak into the next page.
-    LONG cpMin = 0, cpMax = -1;
+    // Pagination bounds. -1 is RichEdit's "to end of document" sentinel INSIDE
+    // EM_FORMATRANGE, but the loop guard below compares the two fields as plain
+    // numbers, where -1 is simply less than 0 and the loop body never executes
+    // at all -- an empty print job and a one-page-blank preview. The bound must
+    // therefore be the document's real character count.
+    LONG cpMin = 0;
+    LONG cpMax = EditTextLengthExact(frame.View().Hwnd());
     int pages = 0;
     bool failed = false;
+
+    // FORMATRANGE rectangles are in TWIPS, not device pixels: RichEdit maps them
+    // through the target DC's LOGPIXELS itself. Passing pixels makes the page
+    // roughly fifteen times too small at screen DPI, which renders as a narrow
+    // column of over-wrapped text in the middle of the sheet.
+    RECT rcPageTwips;
+    SetRect(&rcPageTwips, 0, 0,
+            MulDiv(pr.rcPage.right  - pr.rcPage.left,  kTwipsPerInch, pr.dpiX),
+            MulDiv(pr.rcPage.bottom - pr.rcPage.top,   kTwipsPerInch, pr.dpiY));
+
+    // The printable rectangle is the page minus the user's margins. The margins
+    // are already twips, so this is subtraction rather than conversion.
+    RECT rcPrintTwips;
+    rcPrintTwips.left   = s.page.marginLeft;
+    rcPrintTwips.top    = s.page.marginTop;
+    rcPrintTwips.right  = rcPageTwips.right  - s.page.marginRight;
+    rcPrintTwips.bottom = rcPageTwips.bottom - s.page.marginBottom;
+    if (rcPrintTwips.right  <= rcPrintTwips.left)  rcPrintTwips.right  = rcPrintTwips.left + 1;
+    if (rcPrintTwips.bottom <= rcPrintTwips.top)   rcPrintTwips.bottom = rcPrintTwips.top + 1;
 
     // The pagination and the page framing have to interleave: StartPage must
     // come before the FORMATRANGE that draws onto it, and EndPage after. Doing
@@ -387,8 +471,8 @@ bool PrintDocument(AppFrame& frame, bool quickPrint)
         FORMATRANGE fr = {};
         fr.hdc        = hdc;
         fr.hdcTarget  = hdc;
-        fr.rc         = pr.rcPrint;
-        fr.rcPage     = pr.rcPage;
+        fr.rc         = rcPrintTwips;
+        fr.rcPage     = rcPageTwips;
         fr.chrg.cpMin = cpMin;
         fr.chrg.cpMax = cpMax;
 
@@ -508,19 +592,28 @@ void Preview_Render(PreviewState* st)
     // Fit-to-window DPI, then scaled by the user's zoom. Working in DPI rather
     // than in a scale factor keeps the arithmetic integer-only and lets the
     // same MulDiv twips-to-pixels conversion serve both axes.
-    int fitDpiX = MulDiv(cx, kTwipsPerInch, pageW);
-    int fitDpiY = MulDiv(cy, kTwipsPerInch, pageH);
-    int fitDpi  = (fitDpiX < fitDpiY) ? fitDpiX : fitDpiY;
-    if (fitDpi < 8) fitDpi = 8;
-
-    int effDpi = MulDiv(fitDpi, st->zoom, 100);
-    if (effDpi < 8) effDpi = 8;
-
-    int pw = MulDiv(pageW, effDpi, kTwipsPerInch);
-    int ph = MulDiv(pageH, effDpi, kTwipsPerInch);
+    // ------------------------------------------------------------------
+    //  Rendering strategy: draw the page once at a fixed 96 dpi into its own
+    //  bitmap, then scale that bitmap into the preview pane.
+    //
+    //  Zooming by changing the FORMATRANGE mapping does not work here. A memory
+    //  DC reports the screen's LOGPIXELS and that cannot be changed, so RichEdit
+    //  would keep converting twips at 96 dpi no matter what the rectangles say.
+    //  Rendering at a constant dpi and scaling the result with StretchBlt gives
+    //  exact zoom control with one code path, at the cost of some softness
+    //  above 100% -- acceptable for a preview whose job is page breaks, not
+    //  glyph fidelity.
+    // ------------------------------------------------------------------
+    const int kRenderDpi = 96;
+    int pw = MulDiv(pageW, kRenderDpi, kTwipsPerInch);
+    int ph = MulDiv(pageH, kRenderDpi, kTwipsPerInch);
     if (pw < 8 || ph < 8) return;
 
-    // ---- DIB section -----------------------------------------------------
+    int destW = MulDiv(pw, st->zoom, 100);
+    int destH = MulDiv(ph, st->zoom, 100);
+    if (destW < 8 || destH < 8) return;
+
+    // ---- canvas DIB ----------------------------------------------------
     BITMAPINFO bi = {};
     bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
     bi.bmiHeader.biWidth       = cx;
@@ -539,46 +632,55 @@ void Preview_Render(PreviewState* st)
     HDC memdc = CreateCompatibleDC(hdcScreen);
     HBITMAP hOld = static_cast<HBITMAP>(SelectObject(memdc, hbm));
 
-    // ---- canvas ----------------------------------------------------------
-    // Mid-grey surround, white page, thin dark border. The grey is what makes
-    // the page edge visible; on a white canvas a white page has no boundary.
-    HBRUSH hGrey = CreateSolidBrush(RGB(128, 128, 128));
-    FillRect(memdc, &rcClient, hGrey);
-    DeleteObject(hGrey);
+    // ---- page bitmap -----------------------------------------------------
+    HBITMAP hbmPage = CreateCompatibleBitmap(hdcScreen, pw, ph);
+    if (!hbmPage)
+    {
+        SelectObject(memdc, hOld);
+        DeleteDC(memdc);
+        DeleteObject(hbm);
+        ReleaseDC(hStatic, hdcScreen);
+        return;
+    }
+    HDC hdcPage = CreateCompatibleDC(hdcScreen);
+    HBITMAP hOldPage = static_cast<HBITMAP>(SelectObject(hdcPage, hbmPage));
 
-    int ox = (cx - pw) / 2;
-    int oy = (cy - ph) / 2;
-    if (ox < 0) ox = 0;
-    if (oy < 0) oy = 0;
+    RECT rcPageAll = { 0, 0, pw, ph };
+    FillRect(hdcPage, &rcPageAll, static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
 
-    RECT rcPage = { ox, oy, ox + pw, oy + ph };
-    HBRUSH hWhite = static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH));
-    FillRect(memdc, &rcPage, hWhite);
-    FrameRect(memdc, &rcPage, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+    // ---- rectangles, in TWIPS ---------------------------------------------
+    // FORMATRANGE takes twips and maps them through the DC's LOGPIXELS, which
+    // for this screen-compatible DC is exactly kRenderDpi -- so the twips
+    // rectangles below land on the pw x ph bitmap precisely.
+    RECT rcPageTwips = { 0, 0, pageW, pageH };
 
-    // ---- margins ---------------------------------------------------------
     const PageSetup& ps = st->frame->Settings().page;
-    RECT rcPrint;
-    rcPrint.left   = ox + MulDiv(ps.marginLeft,   effDpi, kTwipsPerInch);
-    rcPrint.top    = oy + MulDiv(ps.marginTop,    effDpi, kTwipsPerInch);
-    rcPrint.right  = ox + pw - MulDiv(ps.marginRight,  effDpi, kTwipsPerInch);
-    rcPrint.bottom = oy + ph - MulDiv(ps.marginBottom, effDpi, kTwipsPerInch);
-    if (rcPrint.right  <= rcPrint.left) rcPrint.right  = rcPrint.left + 1;
-    if (rcPrint.bottom <= rcPrint.top)  rcPrint.bottom = rcPrint.top  + 1;
+    RECT rcPrintTwips;
+    rcPrintTwips.left   = ps.marginLeft;
+    rcPrintTwips.top    = ps.marginTop;
+    rcPrintTwips.right  = pageW - ps.marginRight;
+    rcPrintTwips.bottom = pageH - ps.marginBottom;
+    if (rcPrintTwips.right  <= rcPrintTwips.left)  rcPrintTwips.right  = rcPrintTwips.left + 1;
+    if (rcPrintTwips.bottom <= rcPrintTwips.top)   rcPrintTwips.bottom = rcPrintTwips.top + 1;
 
     // ---- paginate, drawing only the requested page -----------------------
     // The walk runs to the end of the document regardless, because the total
     // page count is only known once pagination finishes. Drawing is suppressed
     // (wParam FALSE) on every page except the target.
+    //
+    // cpMax is the real character count. -1 is RichEdit's in-message "to end"
+    // sentinel but compares as less than zero in the loop guard, which would
+    // make the loop body unreachable and the preview permanently blank.
     HWND hEdit = st->frame->View().Hwnd();
+    LONG textLen = EditTextLengthExact(hEdit);
 
     FORMATRANGE fr = {};
-    fr.hdc        = memdc;
-    fr.hdcTarget  = memdc;
-    fr.rc         = rcPrint;
-    fr.rcPage     = rcPage;
+    fr.hdc        = hdcPage;
+    fr.hdcTarget  = hdcPage;
+    fr.rc         = rcPrintTwips;
+    fr.rcPage     = rcPageTwips;
     fr.chrg.cpMin = 0;
-    fr.chrg.cpMax = -1;
+    fr.chrg.cpMax = textLen;
 
     int page = 1;
     st->cpPageStart = 0;
@@ -608,6 +710,27 @@ void Preview_Render(PreviewState* st)
     // Release RichEdit's measurement cache. Skipping this makes the next
     // preview render start from stale metrics.
     SendMessageW(hEdit, EM_FORMATRANGE, FALSE, 0);
+
+    // ---- compose: page bitmap onto the grey canvas ------------------------
+    // Mid-grey surround, white page, thin dark border. The grey is what makes
+    // the page edge visible; on a white canvas a white page has no boundary.
+    HBRUSH hGrey = CreateSolidBrush(RGB(128, 128, 128));
+    FillRect(memdc, &rcClient, hGrey);
+    DeleteObject(hGrey);
+
+    int ox = (cx - destW) / 2;
+    int oy = (cy - destH) / 2;
+
+    SetStretchBltMode(memdc, HALFTONE);
+    SetBrushOrgEx(memdc, 0, 0, nullptr);
+    StretchBlt(memdc, ox, oy, destW, destH, hdcPage, 0, 0, pw, ph, SRCCOPY);
+
+    RECT rcFrame = { ox, oy, ox + destW, oy + destH };
+    FrameRect(memdc, &rcFrame, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+
+    SelectObject(hdcPage, hOldPage);
+    DeleteDC(hdcPage);
+    DeleteObject(hbmPage);
 
     SelectObject(memdc, hOld);
     DeleteDC(memdc);

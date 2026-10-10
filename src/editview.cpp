@@ -333,26 +333,33 @@ void EditView::ToggleBullets()
     bool on = (pf.wNumbering == PFN_BULLET);
 
     pf.cbSize     = sizeof(pf);
-    pf.dwMask     = PFM_NUMBERING | PFM_OFFSET | PFM_STARTINDENT;
+    // PFM_STARTINDENT is deliberately absent: neither branch moves the first
+    // line, and naming a field in the mask is what makes RichEdit write it.
+    pf.dwMask     = PFM_NUMBERING | PFM_OFFSET;
 
     if (on)
     {
+        // Bullets currently ON: switching them off.
         pf.wNumbering = PFN_BULLET_NONE;
-        // Leave the indents alone rather than zeroing them: the user may have
-        // set a real indent that predates the bullet, and removing the bullet
-        // should not also destroy their layout.
+        // Remove the hanging indent along with the bullet, otherwise the
+        // paragraph keeps a step that nothing on screen explains. A NEGATIVE
+        // offset is a prose-style first-line indent, was not created by
+        // bullets, and must survive their removal.
+        if (pf.dxOffset > 0)
+            pf.dxOffset = 0;
     }
     else
     {
+        // Bullets currently OFF: switching them on.
         pf.wNumbering = PFN_BULLET;
-        if (pf.dxOffset >= 0)
-        {
-            // -288 twips = -0.2 inch hanging indent. Enough for a bullet glyph
-            // plus a small gap, and a round number in inches so the ruler ticks
-            // line up with it.
-            pf.dxStartIndent += 288;
-            pf.dxOffset       = -288;
-        }
+        // A bulleted paragraph needs a hanging indent: the bullet glyph sits on
+        // the first line at the paragraph's left edge and wrapped lines step
+        // right of it. In RichEdit's model that is a POSITIVE dxOffset -- later
+        // lines relative to the first -- with dxStartIndent untouched. Writing
+        // -288 here (as an earlier draft did) produces the mirror image: bullet
+        // out in the margin, wrapped lines at the left edge.
+        if (pf.dxOffset <= 0)
+            pf.dxOffset = 288;      // 0.2 inch; round in inches so ruler ticks align
     }
     SetParaFormat(pf);
 }
@@ -680,6 +687,27 @@ int EditView::ReplaceAll(PCWSTR find, PCWSTR replace, bool matchCase, bool whole
         // divergence from the original.
     }
     return count;
+}
+
+// ===========================================================================
+//  Exact text length
+//
+//  EM_GETTEXTLENGTHEX with GTL_PRECISE returns RichEdit's own character count.
+//  WM_GETTEXTLENGTH is NOT equivalent: for a RichEdit control it can report the
+//  length with CRLF line endings where the control stores a single CR, so the
+//  number is larger than the range EM_FORMATRANGE paginates over. Using it as a
+//  pagination bound lets a loop believe there is one more page than there is.
+// ===========================================================================
+LONG EditTextLengthExact(HWND hEdit)
+{
+    if (!hEdit) return 0;
+
+    GETTEXTLENGTHEX gtl = {};
+    gtl.flags    = GTL_NUMCHARS | GTL_PRECISE;
+    gtl.codepage = 1200;      // UTF-16: count characters, not encoded bytes
+
+    LRESULT lr = SendMessageW(hEdit, EM_GETTEXTLENGTHEX, 0, LParamFromPtr(&gtl));
+    return (lr >= 0) ? static_cast<LONG>(lr) : 0;
 }
 
 // ===========================================================================

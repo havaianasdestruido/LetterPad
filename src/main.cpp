@@ -249,7 +249,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     int exitCode = 0;
     {
         AppFrame frame;
-        if (!frame.Create(nCmdShow, cl.hasFile ? cl.initialFile : nullptr))
+        if (!frame.Create(cl.printAndExit ? SW_HIDE : nCmdShow,
+                          cl.hasFile ? cl.initialFile : nullptr))
         {
             exitCode = 1;
         }
@@ -257,10 +258,22 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
         {
             // /p prints the document we just opened and exits without entering
             // the message loop, which is what a shell print verb expects.
-            // Nothing opened means nothing to print.
             if (cl.hasFile)
                 PrintDocument(frame, /*quickPrint=*/true);
-            frame.FileClose();
+
+            // Destroy synchronously, then drain the queue. FileClose only POSTS
+            // WM_CLOSE, and with no loop running after this branch the window
+            // would never be destroyed: the RichEdit control would still exist
+            // when OleUninitialize runs -- exactly the ordering this file's
+            // header forbids -- and the settings save performed in WM_CLOSE
+            // would never happen at all.
+            DestroyWindow(frame.Hwnd());
+            MSG quit;
+            while (GetMessageW(&quit, nullptr, 0, 0) > 0)
+            {
+                TranslateMessage(&quit);
+                DispatchMessageW(&quit);
+            }
         }
         else
         {
@@ -280,6 +293,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
                     exitCode = 1;
                     break;
                 }
+                // Modeless common dialogs (Find/Replace) need their keyboard
+                // input routed through IsDialogMessage, or Tab and Enter do
+                // nothing inside them. This must happen before accelerator
+                // translation, because the dialog's own keys (Enter in the
+                // "Find what" box) would otherwise be eaten by our table.
+                HWND hFindDlg = FindReplace_DialogHwnd();
+                if (hFindDlg && IsDialogMessageW(hFindDlg, &msg))
+                    continue;
+
                 if (!g_hAccel || !TranslateAcceleratorW(msg.hwnd, g_hAccel, &msg))
                 {
                     TranslateMessage(&msg);

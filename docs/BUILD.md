@@ -1,7 +1,7 @@
 # Building LetterPad
 
 LetterPad is a Win32/COM desktop application. It must be built **on Windows** —
-it links against `Msftedit.dll`, `Ribbon.dll`, `comdlg32`, `ole32`, `gdiplus` and
+it links against `Msftedit.dll`, `Ribbon.dll`, `comdlg32`, `ole32` and
 the RichEdit 4.1 headers, none of which exist outside the Windows SDK.
 
 ## Prerequisites
@@ -159,6 +159,7 @@ install. Add entries as behaviours are pinned down.
 - **x64 pointer truncation:** every `LPARAM` payload in this codebase goes through
   the helpers in `src/util.h`. Never cast a pointer to `LONG`. `/W4` is on to
   enforce this.
-- **GDI+ lifetime:** `GdiplusStartup`/`GdiplusShutdown` are paired in `wWinMain`
-  around the message loop. The ruler draws through GDI+; if you move ruler
-  painting into another thread, the token is not thread-safe.
+- **No GDI+:** the ruler is plain GDI and `gdiplus` is not linked anywhere. If
+  GDI+ is ever introduced, note that `GdiplusStartup`'s token is process-global
+  and not documented as thread-safe, so ruler painting would have to stay on
+  the UI thread.

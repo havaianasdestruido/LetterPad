@@ -53,18 +53,18 @@ public:
         return *this;
     }
 
-    // Detach: surrender ownership WITHOUT releasing. Use when handing a
-    // pointer out through an out-parameter that the caller owns.
-    T** Put() { if (m_p) { m_p->Release(); m_p = nullptr; } return &m_p; }
-
     // Adopt: take ownership of a pointer that ALREADY holds a reference for
     // us (the normal contract for an out-parameter the callee filled in).
     // Does NOT AddRef -- that is the whole difference from operator=.
+    //
+    // This is the ONLY way to obtain the address of the stored pointer. A
+    // second accessor, or an operator&, would give two spellings that differ in
+    // ownership semantics by a single Release call, which is exactly the kind
+    // of near-duplicate that produces intermittent refcount bugs.
     T** Adopt() { if (m_p) { m_p->Release(); m_p = nullptr; } return &m_p; }
 
     T*  Get()      const { return m_p; }
     T*  operator->() const { return m_p; }
-    T** operator&()      { return Put(); }
 
     explicit operator bool() const { return m_p != nullptr; }
 

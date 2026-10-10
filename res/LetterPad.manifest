@@ -64,18 +64,16 @@
       </dpiAware>
       <!-- Long paths: a document can legitimately live deeper than 260
            characters, and without this LetterPad reports "cannot open" on a
-           path that Explorer opens fine. -->
+           path that Explorer opens fine. Path storage is sized to match; see
+           the note in src/LetterPad.h. -->
       <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">
         true
       </longPathAware>
-      <!-- Active-code-page UTF-8. The sources are UTF-8 and /utf-8 is passed to
-           MSVC, but the ACP still governs how the CRT interprets narrow strings
-           coming from the environment. Setting this removes a whole class of
-           mojibake on non-Latin locales. Requires Windows 10 1903+; ignored
-           silently on older systems. -->
-      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">
-        UTF-8
-      </activeCodePage>
+      <!-- NOTE: activeCodePage=UTF-8 is deliberately NOT set. RichEdit decodes
+           BOM-less SF_TEXT through the process ANSI codepage, so forcing the
+           ACP to UTF-8 would make every legacy ANSI .txt file with characters
+           above 0x7F load as mojibake. The ACP stays at the user's locale,
+           which is what plain text on Windows has always meant. -->
     </windowsSettings>
   </application>
 

@@ -48,20 +48,6 @@
 #define ID_GROUP_SHOWHIDE           12
 
 // ----------------------------------------------------------------------------
-//  Group labels. UICC requires every Group to have a CommandName, and the
-//  LabelTitle on that command is what renders as the group caption strip at
-//  the bottom of the group. These are layout elements, so they get their own
-//  low range rather than joining ID_CMD_*.
-// ----------------------------------------------------------------------------
-#define ID_LBL_CLIPBOARD            100
-#define ID_LBL_FONT                 101
-#define ID_LBL_PARAGRAPH            102
-#define ID_LBL_INSERT               103
-#define ID_LBL_EDITING              104
-#define ID_LBL_ZOOM                 105
-#define ID_LBL_SHOWHIDE             106
-
-// ----------------------------------------------------------------------------
 //  Sanity check. IDs 0 and 1 are reserved by the ribbon framework; UICC will
 //  reject markup that assigns them, but the failure is a confusing error about
 //  an unnamed command rather than about the number. Catch it here instead.

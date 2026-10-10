@@ -433,6 +433,41 @@ void Settings_Save(const AppSettings* s)
 //  before being re-inserted at the top, so opening the same file twice does not
 //  consume two slots.
 // ===========================================================================
+namespace {
+
+// ---------------------------------------------------------------------------
+//  Reading an MRU value
+//
+//  RegQueryValueExW does not guarantee a NUL terminator: a value written without
+//  one (by a hand edit, or by any writer that passes a byte count excluding the
+//  terminator) would run a fixed-size reader off the end of its buffer. Querying
+//  the size first and allocating size+1 gives a guaranteed terminator, and it
+//  also removes the MAX_PATH ceiling -- which the MRU needs, because this
+//  process declares itself longPathAware and must therefore remember long paths.
+// ---------------------------------------------------------------------------
+bool ReadMruString(HKEY hKey, PCWSTR name, std::wstring& out)
+{
+    DWORD cb = 0, type = 0;
+    if (RegQueryValueExW(hKey, name, nullptr, &type, nullptr, &cb) != ERROR_SUCCESS)
+        return false;
+    if (type != REG_SZ && type != REG_EXPAND_SZ)
+        return false;
+    if (cb == 0)
+        return false;
+
+    std::wstring buf(cb / sizeof(WCHAR) + 1, L'\0');   // the +1 is the terminator
+    DWORD cbRead = cb;
+    if (RegQueryValueExW(hKey, name, nullptr, nullptr,
+                         reinterpret_cast<BYTE*>(&buf[0]), &cbRead) != ERROR_SUCCESS)
+        return false;
+
+    buf[buf.size() - 1] = L'\0';   // defensive; the +1 above already guarantees it
+    out.assign(buf.c_str());       // stops at the first embedded NUL
+    return !out.empty();
+}
+
+} // anonymous namespace
+
 void Mru_Add(PCWSTR path)
 {
     if (!path || !path[0])
@@ -446,22 +481,14 @@ void Mru_Add(PCWSTR path)
 
     // Read the existing list into a local array so the shift-down below does
     // not read a value it has just overwritten.
-    WCHAR list[kMruMax][MAX_PATH] = {};
-    int   count = 0;
+    std::wstring list[kMruMax];
+    int count = 0;
     for (int i = 0; i < kMruMax; ++i)
     {
         WCHAR name[16];
         StrPrintf(name, _countof(name), L"File%d", i + 1);
-
-        WCHAR value[MAX_PATH] = {};
-        DWORD cb = sizeof(value), type = 0;
-        if (RegQueryValueExW(hKey, name, nullptr, &type,
-                             reinterpret_cast<BYTE*>(value), &cb) == ERROR_SUCCESS &&
-            type == REG_SZ && value[0])
-        {
-            wcsncpy_s(list[count], MAX_PATH, value, _TRUNCATE);
+        if (ReadMruString(hKey, name, list[count]))
             ++count;
-        }
     }
 
     // Drop any existing occurrence of this path (case-insensitive: Windows
@@ -469,10 +496,10 @@ void Mru_Add(PCWSTR path)
     // two entries would waste a slot).
     for (int i = 0; i < count; )
     {
-        if (_wcsicmp(list[i], path) == 0)
+        if (_wcsicmp(list[i].c_str(), path) == 0)
         {
             for (int j = i; j + 1 < count; ++j)
-                wcscpy_s(list[j], MAX_PATH, list[j + 1]);
+                list[j] = list[j + 1];
             --count;
         }
         else ++i;
@@ -481,9 +508,9 @@ void Mru_Add(PCWSTR path)
     // Shift down, keeping at most kMruMax-1 old entries so the new one fits.
     if (count > kMruMax - 1) count = kMruMax - 1;
     for (int i = count - 1; i >= 0; --i)
-        wcscpy_s(list[i + 1], MAX_PATH, list[i]);
+        list[i + 1] = list[i];
 
-    wcscpy_s(list[0], MAX_PATH, path);
+    list[0] = path;
     ++count;
 
     // Write back. Entries beyond the list length are deleted rather than left
@@ -494,8 +521,8 @@ void Mru_Add(PCWSTR path)
         StrPrintf(name, _countof(name), L"File%d", i + 1);
         if (i < count)
             RegSetValueExW(hKey, name, 0, REG_SZ,
-                           reinterpret_cast<const BYTE*>(list[i]),
-                           static_cast<DWORD>((wcslen(list[i]) + 1) * sizeof(WCHAR)));
+                           reinterpret_cast<const BYTE*>(list[i].c_str()),
+                           static_cast<DWORD>((list[i].size() + 1) * sizeof(WCHAR)));
         else
             RegDeleteValueW(hKey, name);
     }
@@ -503,10 +530,10 @@ void Mru_Add(PCWSTR path)
     RegCloseKey(hKey);
 }
 
-int Mru_GetList(PWSTR paths[kMruMax])
+int Mru_GetList(std::wstring paths[kMruMax])
 {
     if (!paths) return 0;
-    for (int i = 0; i < kMruMax; ++i) paths[i][0] = L'\0';
+    for (int i = 0; i < kMruMax; ++i) paths[i].clear();
 
     HKEY hKey = nullptr;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, LP_MRU_KEY, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
@@ -517,16 +544,8 @@ int Mru_GetList(PWSTR paths[kMruMax])
     {
         WCHAR name[16];
         StrPrintf(name, _countof(name), L"File%d", i + 1);
-
-        WCHAR value[MAX_PATH] = {};
-        DWORD cb = sizeof(value), type = 0;
-        if (RegQueryValueExW(hKey, name, nullptr, &type,
-                             reinterpret_cast<BYTE*>(value), &cb) == ERROR_SUCCESS &&
-            type == REG_SZ && value[0])
-        {
-            wcsncpy_s(paths[count], MAX_PATH, value, _TRUNCATE);
+        if (ReadMruString(hKey, name, paths[count]))
             ++count;
-        }
     }
 
     RegCloseKey(hKey);

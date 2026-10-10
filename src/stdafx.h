@@ -59,6 +59,7 @@
 #include <oleidl.h>
 #include <oleauto.h>           // SysAllocString; ole2.h does not pull it in
 #include <propidl.h>           // PROPERTYKEY, IsEqualPropertyKey
+#include <propvarutil.h>       // PropVariantCopy (ole32, NOT propsys)
 #include <richedit.h>
 #include <richole.h>           // IRichEditOle, REOBJECT
 #include <commctrl.h>

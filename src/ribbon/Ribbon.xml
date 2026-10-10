@@ -26,8 +26,8 @@
    formatting has exactly one implementation regardless of which surface
    triggered it.
 
-   Size definitions are the SDK built-ins (OneButton, TwoButtons,
-   ThreeButtons, FiveButtons, FontControl). Built-ins are used deliberately
+   Size definitions are the SDK built-ins (ThreeButtons-OneBigAndTwoSmall,
+   OneFontControl, FiveButtons, ThreeButtons). Built-ins are used deliberately
    instead of hand-written <Ribbon.SizeDefinitions> blocks: a custom
    ScalingPolicy is easy to get subtly wrong, and the symptom is a ribbon that
    collapses controls unexpectedly at narrow widths rather than a compile
@@ -51,24 +51,20 @@
     <Command Name="cmdTabView"          Id="5"   Symbol="ID_TAB_VIEW"
              LabelTitle="View"/>
 
-    <Command Name="cmdGroupClipboard"   Id="6"   Symbol="ID_GROUP_CLIPBOARD"/>
-    <Command Name="cmdGroupFont"        Id="7"   Symbol="ID_GROUP_FONT"/>
-    <Command Name="cmdGroupParagraph"   Id="8"   Symbol="ID_GROUP_PARAGRAPH"/>
-    <Command Name="cmdGroupInsert"      Id="9"   Symbol="ID_GROUP_INSERT"/>
-    <Command Name="cmdGroupEditing"     Id="10"  Symbol="ID_GROUP_EDITING"/>
-    <Command Name="cmdGroupZoom"        Id="11"  Symbol="ID_GROUP_ZOOM"/>
-    <Command Name="cmdGroupShowHide"    Id="12"  Symbol="ID_GROUP_SHOWHIDE"/>
+    <!-- A group's caption strip renders the LabelTitle of the command named in
+         <Group CommandName=...>. Without these the groups draw with empty
+         caption strips. The separate cmdLbl* commands an earlier draft carried
+         were never referenced by any view element and have been removed. -->
+    <Command Name="cmdGroupClipboard"   Id="6"   Symbol="ID_GROUP_CLIPBOARD" LabelTitle="Clipboard"/>
+    <Command Name="cmdGroupFont"        Id="7"   Symbol="ID_GROUP_FONT"      LabelTitle="Font"/>
+    <Command Name="cmdGroupParagraph"   Id="8"   Symbol="ID_GROUP_PARAGRAPH" LabelTitle="Paragraph"/>
+    <Command Name="cmdGroupInsert"      Id="9"   Symbol="ID_GROUP_INSERT"    LabelTitle="Insert"/>
+    <Command Name="cmdGroupEditing"     Id="10"  Symbol="ID_GROUP_EDITING"   LabelTitle="Editing"/>
+    <Command Name="cmdGroupZoom"        Id="11"  Symbol="ID_GROUP_ZOOM"      LabelTitle="Zoom"/>
+    <Command Name="cmdGroupShowHide"    Id="12"  Symbol="ID_GROUP_SHOWHIDE"  LabelTitle="Show or hide"/>
 
     <Command Name="cmdRibbonRoot"       Id="13"  Symbol="ID_RIBBON_ROOT"/>
     <Command Name="cmdQAT"              Id="14"  Symbol="ID_RIBBON_QAT"/>
-
-    <Command Name="cmdLblClipboard"     Id="100" Symbol="ID_LBL_CLIPBOARD"  LabelTitle="Clipboard"/>
-    <Command Name="cmdLblFont"          Id="101" Symbol="ID_LBL_FONT"       LabelTitle="Font"/>
-    <Command Name="cmdLblParagraph"     Id="102" Symbol="ID_LBL_PARAGRAPH"  LabelTitle="Paragraph"/>
-    <Command Name="cmdLblInsert"        Id="103" Symbol="ID_LBL_INSERT"     LabelTitle="Insert"/>
-    <Command Name="cmdLblEditing"       Id="104" Symbol="ID_LBL_EDITING"    LabelTitle="Editing"/>
-    <Command Name="cmdLblZoom"          Id="105" Symbol="ID_LBL_ZOOM"       LabelTitle="Zoom"/>
-    <Command Name="cmdLblShowHide"      Id="106" Symbol="ID_LBL_SHOWHIDE"   LabelTitle="Show or hide"/>
 
     <!-- ===================== application menu =========================== -->
     <Command Name="cmdAppMenu"          Id="2"   Symbol="ID_CMD_APPMENU"
@@ -240,7 +236,7 @@
              TooltipDescription="Move the paragraph closer to the margin."/>
 
     <Command Name="cmdLineSpacingSingle"   Id="110" Symbol="ID_CMD_LINESPACING_SINGLE"   LabelTitle="1.0"/>
-    <Command Name="cmdLineSpacingOneHalf"  Id="111" Symbol="ID_CMD_LINESPACING_ONEHALF"  LabelTitle="1.15"/>
+    <Command Name="cmdLineSpacingOneHalf"  Id="111" Symbol="ID_CMD_LINESPACING_ONEHALF"  LabelTitle="1.5"/>
     <Command Name="cmdLineSpacingDouble"   Id="112" Symbol="ID_CMD_LINESPACING_DOUBLE"   LabelTitle="2.0"/>
     <Command Name="cmdLineSpacingOptions"  Id="113" Symbol="ID_CMD_LINESPACING_OPTIONS"  LabelTitle="Line spacing options..."/>
 
@@ -347,7 +343,7 @@
         <Tab CommandName="cmdTabHome">
 
           <Group CommandName="cmdGroupClipboard"
-                 SizeDefinition="OneBigButton-TwoSmallButtons">
+                 SizeDefinition="ThreeButtons-OneBigAndTwoSmall">
             <Button CommandName="cmdPaste"/>
             <Button CommandName="cmdCut"/>
             <Button CommandName="cmdCopy"/>
@@ -359,14 +355,14 @@
                "FontWithColor") is the variant that exposes the highlight
                colour and the vertical-positioning properties, which is what
                a word processor needs. -->
-          <Group CommandName="cmdGroupFont" SizeDefinition="FontControl">
+          <Group CommandName="cmdGroupFont" SizeDefinition="OneFontControl">
             <FontControl CommandName="cmdFontControl"
                          FontType="RichFont"
                          HasVerticalPositioning="true"/>
           </Group>
 
           <Group CommandName="cmdGroupParagraph"
-                 SizeDefinition="OneBigButton-FourSmallButtons">
+                 SizeDefinition="FiveButtons">
             <ToggleButton CommandName="cmdBullets"/>
             <ToggleButton CommandName="cmdAlignLeft"/>
             <ToggleButton CommandName="cmdAlignCenter"/>

@@ -1,26 +1,37 @@
 // ============================================================================
 //  ruler.cpp -- the horizontal ruler above the document
 //
-//  The ruler shows three things: the page's linear scale in the user's chosen
-//  unit, the grey "unprintable margin" bands at each end, and two draggable
-//  markers for the paragraph's left indent and first-line indent.
+//  THE INDENT MODEL (read this before touching a marker)
+//  RichEdit's PARAFORMAT stores two values, and their meaning is the opposite
+//  of the intuitive reading:
 //
-//  It is drawn with plain GDI -- MoveToEx/LineTo/TextOut/FillRect. No GDI+.
-//  GDI+ would need a startup token whose lifetime is process-global and which
-//  is not documented as thread-safe, and for tick marks and text it buys
-//  nothing. The one thing GDI+ would genuinely help with (anti-aliased marker
-//  triangles) is cosmetic.
+//      dxStartIndent   the position of the FIRST line, from the left margin
+//      dxOffset        the position of the SECOND and later lines, RELATIVE TO
+//                      dxStartIndent
+//
+//  So a hanging indent (bullets, numbered lists) is dxOffset > 0: the first line
+//  sits at the margin with the bullet and the wrapped lines step right. A
+//  paragraph whose first line is indented (prose style) is dxOffset < 0.
+//  Treating dxStartIndent as "the paragraph indent" -- the obvious but wrong
+//  reading -- swaps the two markers and makes every drag write the other
+//  indent. Everything below is written against the correct model.
+//
+//  SCALE
+//  The ruler maps twips to pixels through one rational scale, pxNum/pxDen,
+//  where pxNum = dpiX * zoomPercent and pxDen = 1440 * 100. A single rational
+//  is used rather than a twips-per-pixel integer because the inverse of the
+//  scale is not an integer at most zooms, and an integer twipsPerPixel drifts
+//  visibly: at 200% zoom an inch would otherwise occupy half its true width.
+//  The same scale feeds the tick grid, the margin bands, the markers and the
+//  drag hit-test, so they cannot disagree with each other.
 //
 //  PAINTING
-//  WM_PAINT builds the whole ruler into a memory DC and blits it once. Drawing
-//  straight to the window DC produces visible tick-by-tick painting during a
-//  resize, because each GDI call is a separate blit to the screen.
+//  WM_PAINT builds the whole ruler into a memory DC and blits once. Drawing
+//  straight to the window DC shows tick-by-tick painting during a resize.
 //
-//  HIT TESTING / DRAGGING
-//  The indent markers are draggable. Dragging is implemented by converting the
-//  mouse x into twips and reporting it to the frame, which applies it to the
-//  paragraph. The ruler never mutates the document itself: it is a view, and a
-//  view that also writes is how the ruler and the document get out of step.
+//  The ruler is a view. It never writes to the document itself; drags are
+//  reported to the frame, which applies them. A view that also edits is how a
+//  ruler and a document get out of step.
 // ============================================================================
 #include "stdafx.h"
 #include "LetterPad.h"
@@ -41,16 +52,17 @@ constexpr int kMarkerHeight = 7;
 // ---------------------------------------------------------------------------
 struct RulerState
 {
-    UnitSystem units        = kUnitInch;
-    LONG       pageWidthTwips = 8 * kTwipsPerInch + kTwipsPerInch / 2;
+    UnitSystem units           = kUnitInch;
+    LONG       pageWidthTwips  = 8 * kTwipsPerInch + kTwipsPerInch / 2;
     LONG       marginLeftTwips  = kTwipsPerInch;
     LONG       marginRightTwips = kTwipsPerInch;
-    LONG       startIndentTwips = 0;
-    LONG       firstLineTwips   = 0;   // dxOffset, usually negative
-    int        textOriginX      = 0;   // where the printable area starts, px
-    int        twipsPerPixel    = 15;  // 1440/96 at 100% zoom
+    LONG       firstLineTwips   = 0;   // dxStartIndent
+    LONG       laterOffsetTwips = 0;   // dxOffset, relative to firstLineTwips
+    int        textOriginX      = 0;   // left margin, in pixels
+    LONG       pxNum            = 96;  // pixels-per-twip, as the rational
+    LONG       pxDen            = 1440; //   pxNum / pxDen
     bool       dragging         = false;
-    int        dragWhich        = 0;   // 1 = start indent, 2 = first line
+    int        dragWhich        = 0;   // 1 = left/later marker, 2 = first line
 };
 
 RulerState* StateOf(HWND h)
@@ -58,32 +70,38 @@ RulerState* StateOf(HWND h)
     return PtrFromLParam<RulerState>(GetWindowLongPtrW(h, GWLP_USER));
 }
 
-// Converts a twip offset from the left margin into a ruler x coordinate.
 int TwipToX(const RulerState* s, LONG twips)
 {
-    if (!s || s->twipsPerPixel <= 0) return s ? s->textOriginX : 0;
-    return s->textOriginX + (static_cast<int>(twips) / s->twipsPerPixel);
+    if (!s) return 0;
+    return s->textOriginX + MulDiv(twips, s->pxNum, s->pxDen);
 }
 
 LONG XToTwip(const RulerState* s, int x)
 {
     if (!s) return 0;
-    return static_cast<LONG>((x - s->textOriginX) * s->twipsPerPixel);
+    return MulDiv(x - s->textOriginX, s->pxDen, s->pxNum);
+}
+
+// Positions of the two markers. The upper triangle is the FIRST line; the lower
+// one is the left edge of the second and later lines.
+int XFirstLine(const RulerState* s) { return TwipToX(s, s->firstLineTwips); }
+int XLaterLines(const RulerState* s)
+{
+    return TwipToX(s, s->firstLineTwips + s->laterOffsetTwips);
 }
 
 // ---------------------------------------------------------------------------
-//  Tick scale for one unit system
+//  Tick scale
 //
-//  Everything about the tick grid is derived from two numbers: how many twips
-//  one minor tick represents, and how many minor ticks make a major (labelled)
-//  tick. Keeping them together in one table per unit is what stops the label
-//  arithmetic and the tick arithmetic from drifting apart -- which is the bug
-//  this file is most likely to grow, because the two are computed in different
-//  functions.
+//  One rational step per unit, in twips per minor tick, expressed as num/den so
+//  that metric units -- where a millimetre is 56.69 twips and no integer step is
+//  exact -- still land on the right pixels. An integer twips-per-minor for
+//  centimetres is how a "1 cm" label ends up an inch away from the last one.
 // ---------------------------------------------------------------------------
 struct TickScale
 {
-    LONG twipsPerMinor;   // width of one minor tick, in twips
+    LONG num;             // twips per minor tick = num / den
+    LONG den;
     int  minorsPerMajor;  // minor ticks between labelled ticks
 };
 
@@ -92,29 +110,27 @@ TickScale ScaleForUnit(UnitSystem u)
     switch (u)
     {
     case kUnitCm:
-        // Minor = 0.5 mm (72 twips), major = 5 mm. Labels appear at whole
-        // centimetres, so half the major ticks carry a label and half do not;
-        // that is the conventional metric ruler layout.
-        return { kTwipsPerInch / 20, 10 };
+        // Minor = 1 mm. 1 mm = 1440/25.4 twips = 14400/254 exactly. Major and
+        // labelled every 10 minors, i.e. every centimetre.
+        return { 14400, 254, 10 };
     case kUnitPoint:
         // Minor = 1 pt, major = 12 pt.
-        return { kTwipsPerPt, 12 };
+        return { kTwipsPerPt, 1, 12 };
     case kUnitPica:
-        // Minor = 2 pt (40 twips), major = 1 pica (6 minors).
-        return { kTwipsPerPica / 6, 6 };
+        // Minor = 2 pt, major = 1 pica (6 minors).
+        return { kTwipsPerPica / 6, 1, 6 };
     case kUnitInch:
     default:
         // Minor = 1/8 inch, major = 1 inch.
-        return { kTwipsPerInch / 8, 8 };
+        return { kTwipsPerInch / 8, 1, 8 };
     }
 }
 
-// Formats the label for a major tick. `minorIndex` is the tick's position
-// counted in minor units from the left margin; converting it to the user's unit
-// is the whole job of this function. An empty buffer means "major tick with no
-// label", which happens on the metric ruler between whole centimetres.
-void FormatTickLabel(UnitSystem u, int minorIndex, const TickScale& sc,
-                     PWSTR buf, size_t cch)
+// Formats the label for a major tick. `minorIndex` counts minor ticks from the
+// left margin; converting that to the user's unit is the whole job here. An
+// empty buffer means "major tick with no label", which the metric ruler uses
+// between whole centimetres.
+void FormatTickLabel(UnitSystem u, int minorIndex, PWSTR buf, size_t cch)
 {
     buf[0] = L'\0';
     if (minorIndex < 0) return;
@@ -122,28 +138,22 @@ void FormatTickLabel(UnitSystem u, int minorIndex, const TickScale& sc,
     switch (u)
     {
     case kUnitInch:
-        // 8 minors per inch, and every major is a whole inch.
-        StrPrintf(buf, cch, L"%d", minorIndex / sc.minorsPerMajor);
+        StrPrintf(buf, cch, L"%d", minorIndex / 8);
         break;
 
     case kUnitCm:
-    {
-        // minors are 0.5 mm, so millimetres = minorIndex / 2. Label only whole
-        // centimetres; a label every 5 mm would overlap itself at any normal zoom.
-        int mm = minorIndex / 2;
-        if (mm % 10 == 0)
-            StrPrintf(buf, cch, L"%d", mm / 10);
+        // minors are millimetres; label whole centimetres only. A label every
+        // 5 mm would overlap itself at any normal zoom.
+        if (minorIndex % 10 == 0)
+            StrPrintf(buf, cch, L"%d", minorIndex / 10);
         break;
-    }
 
     case kUnitPoint:
-        // minors are 1 pt, majors are 12 pt.
         StrPrintf(buf, cch, L"%d", minorIndex);
         break;
 
     case kUnitPica:
-        // 6 minors per pica, majors are whole picas.
-        StrPrintf(buf, cch, L"%d", minorIndex / sc.minorsPerMajor);
+        StrPrintf(buf, cch, L"%d", minorIndex / 6);
         break;
     }
 }
@@ -190,28 +200,27 @@ void PaintRuler(HWND hwnd, HDC hdcTarget, const RECT& rcClient)
     HPEN hPenMajor = CreatePen(PS_SOLID, 1, RGB(40, 40, 40));
     HPEN hOldPen   = static_cast<HPEN>(SelectObject(hdc, hPenMinor));
 
-    // One table drives both the tick spacing and the labels, so they cannot
-    // disagree. See ScaleForUnit.
     TickScale sc = ScaleForUnit(s->units);
-    LONG twipsPerMinor = sc.twipsPerMinor;
-    if (twipsPerMinor <= 0) twipsPerMinor = kTwipsPerInch / 8;
 
     SetBkMode(hdc, TRANSPARENT);
     HFONT hFont = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     HFONT hOldFont = static_cast<HFONT>(SelectObject(hdc, hFont));
 
-    // Iterate over the printable width in minor units. Bounded by the page
-    // width, so a bogus twipsPerPixel cannot make this run away.
     LONG textWidth = s->pageWidthTwips - s->marginLeftTwips - s->marginRightTwips;
     if (textWidth < 0) textWidth = 0;
 
-    for (LONG t = 0; t <= textWidth; t += twipsPerMinor)
+    // Iterate by minor-tick INDEX and derive each position with MulDiv, so a
+    // non-integer twip step (the metric case) accumulates no error: tick i is at
+    // exactly i * num/den twips, never at the sum of i rounded steps.
+    for (int i = 0; ; ++i)
     {
+        LONG t = MulDiv(i, sc.num, sc.den);
+        if (t > textWidth) break;
+
         int x = TwipToX(s, t);
         if (x < 0 || x > cx) continue;
 
-        int minorIndex = static_cast<int>(t / twipsPerMinor);
-        bool major = (minorIndex % sc.minorsPerMajor) == 0;
+        bool major = (i % sc.minorsPerMajor) == 0;
 
         SelectObject(hdc, major ? hPenMajor : hPenMinor);
 
@@ -225,7 +234,7 @@ void PaintRuler(HWND hwnd, HDC hdcTarget, const RECT& rcClient)
         if (major)
         {
             WCHAR label[16];
-            FormatTickLabel(s->units, minorIndex, sc, label, _countof(label));
+            FormatTickLabel(s->units, i, label, _countof(label));
             if (label[0])
             {
                 int cchLabel = static_cast<int>(wcslen(label));
@@ -242,24 +251,19 @@ void PaintRuler(HWND hwnd, HDC hdcTarget, const RECT& rcClient)
     }
 
     // ---- indent markers ----------------------------------------------------
-    // Two triangles: the upper one is the first-line indent (dxOffset relative
-    // to dxStartIndent), the lower one is the left indent itself. They are drawn
-    // at different vertical positions so that a negative first-line offset --
-    // the hanging indent every bulleted list uses -- is visible as two separate
-    // markers rather than one overlapping blob.
-    LONG startTwips = s->startIndentTwips;
-    LONG firstTwips = s->startIndentTwips + s->firstLineTwips;
-
-    int xStart = TwipToX(s, startTwips);
-    int xFirst = TwipToX(s, firstTwips);
+    // Upper triangle: the FIRST line (dxStartIndent). Lower triangle: the left
+    // edge of the second and later lines (dxStartIndent + dxOffset). Drawing
+    // them at different vertical positions is what makes a hanging indent
+    // readable as two markers instead of one overlapping blob.
+    int xFirst = XFirstLine(s);
+    int xLater = XLaterLines(s);
 
     HPEN hPenMark = CreatePen(PS_SOLID, 1, RGB(30, 30, 30));
     SelectObject(hdc, hPenMark);
 
-    // Upper triangle: first-line indent.
     {
         POINT pts[3] = {
-            { xFirst,              2 },
+            { xFirst,                  2 },
             { xFirst - kMarkerWidth / 2, 2 + kMarkerHeight },
             { xFirst + kMarkerWidth / 2, 2 + kMarkerHeight },
         };
@@ -270,12 +274,11 @@ void PaintRuler(HWND hwnd, HDC hdcTarget, const RECT& rcClient)
         DeleteObject(hMark);
     }
 
-    // Lower triangle: left indent.
     {
         POINT pts[3] = {
-            { xStart,              cy - 2 },
-            { xStart - kMarkerWidth / 2, cy - 2 - kMarkerHeight },
-            { xStart + kMarkerWidth / 2, cy - 2 - kMarkerHeight },
+            { xLater,                  cy - 2 },
+            { xLater - kMarkerWidth / 2, cy - 2 - kMarkerHeight },
+            { xLater + kMarkerWidth / 2, cy - 2 - kMarkerHeight },
         };
         HBRUSH hMark = CreateSolidBrush(RGB(90, 90, 90));
         HBRUSH hOldBr = static_cast<HBRUSH>(SelectObject(hdc, hMark));
@@ -318,14 +321,6 @@ LRESULT CALLBACK RulerWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg)
     {
-    case WM_NCCREATE:
-    {
-        // The ruler has no per-instance data at creation; Ruler_SetMetrics
-        // allocates the state on first use so that a ruler that is never
-        // measured costs nothing.
-        return DefWindowProcW(hwnd, msg, wp, lp);
-    }
-
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
@@ -350,20 +345,30 @@ LRESULT CALLBACK RulerWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (!s) return 0;
 
         int x = GET_X_LPARAM(lp);
-        int xStart = TwipToX(s, s->startIndentTwips);
-        int xFirst = TwipToX(s, s->startIndentTwips + s->firstLineTwips);
+        int y = GET_Y_LPARAM(lp);
+        int xFirst = XFirstLine(s);
+        int xLater = XLaterLines(s);
 
-        // Whichever marker is closer to the click is the one that gets dragged.
-        // Comparing distances rather than testing "is the click inside the
-        // triangle" makes the markers easy to grab even when they overlap, which
-        // is the common case for a paragraph with no hanging indent.
-        int dStart = abs(x - xStart);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        int cy = rc.bottom - rc.top;
+
         int dFirst = abs(x - xFirst);
+        int dLater = abs(x - xLater);
 
-        if (min(dStart, dFirst) <= kMarkerWidth)
+        if (min(dFirst, dLater) <= kMarkerWidth)
         {
-            s->dragging  = true;
-            s->dragWhich = (dFirst <= dStart) ? 2 : 1;
+            // When the markers overlap -- the common case for a paragraph with
+            // no hanging indent -- distance cannot choose between them, so the
+            // vertical half of the click does: the upper triangle is the first
+            // line, the lower one is the left/later-lines edge.
+            bool overlap = abs(xFirst - xLater) <= kMarkerWidth;
+            if (overlap)
+                s->dragWhich = (y < cy / 2) ? 2 : 1;
+            else
+                s->dragWhich = (dFirst <= dLater) ? 2 : 1;
+
+            s->dragging = true;
             SetCapture(hwnd);
         }
         return 0;
@@ -377,9 +382,9 @@ LRESULT CALLBACK RulerWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         int x = GET_X_LPARAM(lp);
         LONG twips = XToTwip(s, x);
 
-        // Clamp to the printable area. Allowing a negative left indent would
-        // push text under the margin band, and allowing one past the right
-        // margin would leave nothing to lay out in.
+        // Clamp to the printable area. Allowing a negative position would push
+        // text under the margin band; allowing one past the right margin would
+        // leave nothing to lay out in.
         LONG maxTwips = s->pageWidthTwips - s->marginLeftTwips - s->marginRightTwips;
         if (twips < 0) twips = 0;
         if (twips > maxTwips) twips = maxTwips;
@@ -390,8 +395,6 @@ LRESULT CALLBACK RulerWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         const LONG kSnap = kTwipsPerInch / 16;
         twips = ((twips + kSnap / 2) / kSnap) * kSnap;
 
-        // Report to the frame. The ruler does not write to the document; see the
-        // file header for why.
         HWND hFrame = GetParent(hwnd);
         AppFrame* frame = hFrame ? AppFrame::FromHwnd(hFrame) : nullptr;
         if (frame)
@@ -402,20 +405,22 @@ LRESULT CALLBACK RulerWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
             if (s->dragWhich == 1)
             {
-                // Lower marker = the paragraph's left indent. Moves the whole
-                // paragraph; dxOffset is left alone so any hanging indent the
-                // user set survives the drag.
-                pf.dwMask        = PFM_STARTINDENT;
-                pf.dxStartIndent = twips;
+                // Lower marker = the left edge of the second and later lines.
+                // dxOffset is relative to dxStartIndent, so moving the later
+                // lines while leaving the first line exactly where it is means
+                // writing the difference.
+                pf.dwMask   = PFM_OFFSET;
+                pf.dxOffset = twips - pf.dxStartIndent;
             }
             else
             {
-                // Upper marker = the first line's position. dxOffset is defined
-                // as the first line's distance FROM dxStartIndent, so the value
-                // to store is the difference between where the user dragged and
-                // where the paragraph starts -- not the absolute position.
-                pf.dwMask   = PFM_OFFSET;
-                pf.dxOffset = twips - pf.dxStartIndent;
+                // Upper marker = the first line. Moving it must not drag the
+                // later lines with it, so their absolute position (start +
+                // offset) is preserved by rewriting both fields.
+                LONG laterAbsolute = pf.dxStartIndent + pf.dxOffset;
+                pf.dwMask        = PFM_STARTINDENT | PFM_OFFSET;
+                pf.dxStartIndent = twips;
+                pf.dxOffset      = laterAbsolute - twips;
             }
             frame->View().SetParaFormat(pf);
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -428,7 +433,7 @@ LRESULT CALLBACK RulerWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         RulerState* s = StateOf(hwnd);
         if (s && s->dragging)
         {
-            s->dragging = false;
+            s->dragging  = false;
             s->dragWhich = 0;
             ReleaseCapture();
         }
@@ -481,34 +486,37 @@ void Ruler_SetMetrics(HWND hRuler, const AppSettings& s, const RECT& rcText,
     }
 
     st->units          = s.units;
+    // The FULL configured page width, not the edit control's client width. The
+    // ruler's job is to show the page measure; deriving it from the client area
+    // would make the margin bands move every time the window is resized and
+    // would disagree with page setup.
     st->pageWidthTwips = (pageWidthTwips > 0) ? pageWidthTwips
                                               : (8 * kTwipsPerInch + kTwipsPerInch / 2);
     st->marginLeftTwips   = s.page.marginLeft;
     st->marginRightTwips  = s.page.marginRight;
-    st->startIndentTwips  = pf.dxStartIndent;
-    st->firstLineTwips    = pf.dxOffset;
+    st->firstLineTwips    = pf.dxStartIndent;
+    st->laterOffsetTwips  = pf.dxOffset;
 
-    // Pixels per twip depends on the ruler's own width and the zoom, because
-    // the ruler shows the same page the document is showing. Deriving it from
-    // rcText keeps the ruler's scale identical to the edit control's, so a
-    // marker dragged to "3 inches" on the ruler really is 3 inches in the text.
-    int cxText = rcText.right - rcText.left;
-    if (cxText <= 0) cxText = 1;
+    // ---- scale -------------------------------------------------------------
+    // px = twips * dpiX * zoom / (1440 * 100). Higher zoom must produce MORE
+    // pixels per twip, so zoom sits in the numerator; an earlier version had it
+    // in the denominator via a twips-per-pixel integer, which made 200% zoom
+    // render an inch at half its true width.
+    HDC hdc = GetDC(hRuler);
+    int dpiX = hdc ? GetDeviceCaps(hdc, LOGPIXELSX) : 96;
+    if (hdc) ReleaseDC(hRuler, hdc);
+    if (dpiX <= 0) dpiX = 96;
 
     int zoomPct = (s.nZoomDen > 0) ? (s.nZoomNum * 100 / s.nZoomDen) : 100;
-    if (zoomPct < 10) zoomPct = 10;
+    if (zoomPct < 10)  zoomPct = 10;
+    if (zoomPct > 500) zoomPct = 500;
 
-    LONG scaledPage = MulDiv(st->pageWidthTwips, zoomPct, 100);
-    if (scaledPage <= 0) scaledPage = st->pageWidthTwips;
+    st->pxNum = static_cast<LONG>(dpiX) * zoomPct;
+    st->pxDen = kTwipsPerInch * 100;
 
-    // twipsPerPixel is the inverse scale. Integer division here loses sub-pixel
-    // precision, which is invisible on a ruler and avoids floating point in the
-    // paint path.
-    st->twipsPerPixel = (scaledPage + cxText / 2) / cxText;
-    if (st->twipsPerPixel < 1) st->twipsPerPixel = 1;
+    st->textOriginX = MulDiv(s.page.marginLeft, st->pxNum, st->pxDen);
 
-    // The printable area starts at the left margin, which is also scaled.
-    st->textOriginX = MulDiv(s.page.marginLeft, zoomPct, 100) / st->twipsPerPixel;
+    (void)rcText;    // reserved: a future text-area-only ruler mode
 
     Ruler_Invalidate(hRuler);
 }

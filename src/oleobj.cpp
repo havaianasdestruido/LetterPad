@@ -76,15 +76,32 @@ HRESULT InsertFileAsObject(HWND hEdit, PCWSTR path)
     HRESULT hr = pOle->GetClientSite(pSite.Adopt());
     if (FAILED(hr)) return hr;
 
-    // Step 2: create the object bound to that site.
+    // Step 1b: a storage for the object.
+    // OleCreateFromFile does NOT manufacture one when pStg is null -- the call
+    // simply fails -- and RichEdit needs REOBJECT::pstg in order to serialise
+    // the embedded object into RTF on save. Building it on an ILockBytes over a
+    // fresh HGLOBAL gives an in-memory compound document whose lifetime matches
+    // the REOBJECT's. (IRichEditOleCallback::GetNewStorage is the other supported
+    // source; using it would mean implementing the callback, which buys nothing
+    // for the from-file case.)
+    ComPtr<ILockBytes> pLock;
+    hr = CreateILockBytesOnHGlobal(nullptr, TRUE, pLock.Adopt());
+    if (FAILED(hr)) return hr;
+
+    ComPtr<IStorage> pStg;
+    hr = StgCreateDocfileOnILockBytes(pLock.Get(),
+                                      STGM_SHARE_EXCLUSIVE | STGM_CREATE | STGM_READWRITE,
+                                      0, pStg.Adopt());
+    if (FAILED(hr)) return hr;
+
+    // Step 2: create the object bound to that site and that storage.
     //   CLSID_NULL       let OLE choose the handler from the file extension
     //   OLERENDER_DRAW   the object renders itself; do not pre-render to a
     //                    metafile, which would freeze a picture at its current
     //                    size and lose the ability to edit it in place
-    //   pStg = nullptr   OleCreateFromFile builds its own storage from the path
     ComPtr<IOleObject> pObj;
     hr = OleCreateFromFile(CLSID_NULL, path, IID_IOleObject, OLERENDER_DRAW,
-                           nullptr, pSite.Get(), nullptr,
+                           nullptr, pSite.Get(), pStg.Get(),
                            reinterpret_cast<void**>(pObj.Adopt()));
     if (FAILED(hr) || !pObj)
         return hr;
@@ -107,6 +124,9 @@ HRESULT InsertFileAsObject(HWND hEdit, PCWSTR path)
     reobj.dvaspect   = DVASPECT_CONTENT;
     reobj.poleobj    = pObj.Get();
     reobj.polesite   = pSite.Get();
+    // The storage created above. Without it the object has nowhere to live and
+    // RichEdit cannot write it into the RTF stream on save.
+    reobj.pstg       = pStg.Get();
     // REO_BELOWBASELINE puts the object on the text baseline rather than
     // floating, which is what a word processor wants for an inline picture.
     // REO_RESIZABLE lets the user drag its sizing handles.
@@ -300,13 +320,13 @@ HRESULT EditView::InsertObject(HWND hOwner)
         L"Picture Files\0*.bmp;*.jpg;*.jpeg;*.gif;*.png;*.tif;*.tiff;*.wmf;*.emf\0"
         L"Documents\0*.doc;*.docx;*.xls;*.xlsx;*.ppt;*.pptx;*.pdf\0\0";
 
-    WCHAR buf[MAX_PATH] = {};
+    WCHAR buf[kMaxPathBuffer] = {};   // see kMaxPathBuffer in LetterPad.h
     OPENFILENAMEW ofn = {};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner   = hOwner ? hOwner : GetParent(m_hEdit);
     ofn.lpstrFilter = kFilter;
     ofn.lpstrFile   = buf;
-    ofn.nMaxFile    = _countof(buf);
+    ofn.nMaxFile    = static_cast<DWORD>(_countof(buf));
     ofn.lpstrTitle  = L"Insert Object";
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ENABLESIZING;
 

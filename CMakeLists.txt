@@ -289,9 +289,12 @@ else()
     add_custom_target(verify-ribbon-ids ALL
         COMMAND ${CMAKE_COMMAND}
                 -DCOMMITTED="${CMAKE_CURRENT_SOURCE_DIR}/src/ribbon/RibbonIDs.h"
+                -DCOMMITTED_CMDS="${CMAKE_CURRENT_SOURCE_DIR}/src/resource.h"
                 -DGENERATED="${RIBBON_GEN_HEADER}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/VerifyRibbonIds.cmake"
         DEPENDS "${RIBBON_GEN_HEADER}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/ribbon/RibbonIDs.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/resource.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/VerifyRibbonIds.cmake"
         COMMENT "Verifying ribbon IDs match RibbonIDs.h"
         VERBATIM

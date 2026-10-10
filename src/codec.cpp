@@ -208,9 +208,13 @@ FileFormat DetectFormatByContent(PCWSTR path)
     if (cb >= 4 && head[0] == 'P' && head[1] == 'K' && head[2] == 3 && head[3] == 4)
     {
         // ODT's mimetype entry is required by the ODF spec to be the FIRST
-        // entry in the archive and stored uncompressed, so this is reliable
-        // rather than merely likely.
-        if (ByteRangeContains(head, cb, "mimetype"))
+        // entry, stored uncompressed and unencrypted. That makes its position
+        // exact, not approximate: local file header is 30 bytes, so the entry
+        // name begins at offset 30. Scanning the whole buffer for the string
+        // would also match a DOCX archive that merely contains a file or a
+        // fragment named "mimetype", so the position is checked rather than
+        // searched.
+        if (cb >= 38 && memcmp(head + 30, "mimetype", 8) == 0)
             return FileFormat::Odt;
         if (ByteRangeContains(head, cb, "word/document.xml"))
             return FileFormat::Docx;
@@ -323,8 +327,19 @@ HRESULT Document_Load(HWND hEdit, PCWSTR path, FileFormat fmt)
         // SF_UNICODE is little-endian only, and a BE text file is vanishingly
         // rare on Windows. It loads as ANSI mojibake, which is visible and
         // therefore better than silently refusing to open.
-        if (cb >= 2 && head[0] == 0xFF && head[1] == 0xFE)
+        bool hasBom = (cb >= 2 && head[0] == 0xFF && head[1] == 0xFE);
+        if (hasBom)
+        {
             flags |= SF_UNICODE;
+
+            // Skip the BOM before streaming. SF_UNICODE tells RichEdit the
+            // ENCODING; it does not tell it to expect or consume a BOM, so the
+            // two BOM bytes would otherwise be streamed as a U+FEFF character
+            // at the top of the document. Because Document_Save writes a fresh
+            // BOM on every save, not skipping here would add one more invisible
+            // character per round trip.
+            SetFilePointer(hFile, 2, nullptr, FILE_BEGIN);
+        }
     }
 
     LRESULT lr = SendMessageW(hEdit, EM_STREAMIN, flags, LParamFromPtr(&es));
@@ -357,17 +372,43 @@ HRESULT Document_Save(HWND hEdit, PCWSTR path, FileFormat fmt)
     if (!FormatIsImplemented(fmt))
         return E_NOTIMPL;
 
+    // Write is deliberately load-only. FormatIsImplemented reports it as
+    // supported because the load path handles it, but saving a document as
+    // .wri would produce an RTF file wearing a legacy extension -- readable by
+    // LetterPad, confusing to everything else, and not what the user asked for.
+    // Rejecting here rather than in the filter list means a path typed by hand
+    // gets the same answer as one picked from the dialog.
+    if (fmt == FileFormat::Wri)
+        return E_NOTIMPL;
+
     // Write to a temporary file and rename over the target. A crash or a full
     // disk part-way through a direct write leaves the user with a truncated
     // document and no copy of the original -- the worst possible outcome for a
     // save operation. The rename is atomic on NTFS within a volume, so at every
     // instant either the old file or the complete new file exists.
-    WCHAR tmp[MAX_PATH + 16] = {};
-    StrPrintf(tmp, _countof(tmp), L"%s.lp-tmp", path);
+    //
+    // The temp name is built as a std::wstring rather than into a fixed buffer
+    // because the source path may be longer than MAX_PATH (this process is
+    // longPathAware). A truncated temp name is not merely cosmetic: it can
+    // collide with an unrelated file and rename over it.
+    std::wstring tmp;
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    bool useTmp = false;
 
-    HANDLE hFile = CreateFileW(tmp, GENERIC_WRITE, 0, nullptr,
-                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hFile == INVALID_HANDLE_VALUE)
+    // 9 characters of suffix keeps the total within the 32767-character path
+    // limit whenever the source path is; if the source is already at the limit
+    // the temp cannot be named and the save falls back to a direct write.
+    if (wcslen(path) + 9 < 32767)
+    {
+        tmp.assign(path);
+        tmp.append(L".lp-tmp");
+
+        hFile = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        useTmp = (hFile != INVALID_HANDLE_VALUE);
+    }
+
+    if (!useTmp)
     {
         // Fall back to writing the target directly. Better to risk truncation
         // than to fail the save outright when the directory is not writable for
@@ -376,7 +417,6 @@ HRESULT Document_Save(HWND hEdit, PCWSTR path, FileFormat fmt)
         hFile = OpenForWrite(path);
         if (hFile == INVALID_HANDLE_VALUE)
             return HrFromWin32(GetLastError());
-        tmp[0] = L'\0';
     }
 
     StreamCtx ctx;
@@ -397,7 +437,8 @@ HRESULT Document_Save(HWND hEdit, PCWSTR path, FileFormat fmt)
     es.dwError     = 0;
     es.pfnCallback = StreamOutProc;
 
-    WPARAM flags = (fmt == FileFormat::Rtf || fmt == FileFormat::Wri)
+    // Wri was rejected above, so this is RTF or Text.
+    WPARAM flags = (fmt == FileFormat::Rtf)
                        ? static_cast<WPARAM>(SF_RTF)
                        : static_cast<WPARAM>(SF_TEXT | SF_UNICODE);
 
@@ -412,29 +453,29 @@ HRESULT Document_Save(HWND hEdit, PCWSTR path, FileFormat fmt)
 
     if (ctx.lastError != ERROR_SUCCESS || es.dwError != 0)
     {
-        DeleteFileW(tmp);
+        if (useTmp) DeleteFileW(tmp.c_str());
         return HrFromWin32(ctx.lastError != ERROR_SUCCESS ? ctx.lastError : es.dwError);
     }
 
-    if (tmp[0])
+    if (useTmp)
     {
         // MOVEFILE_REPLACE_EXISTING is required: the target usually exists.
         // MOVEFILE_WRITE_THROUGH makes the directory entry update durable.
-        if (!MoveFileExW(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        if (!MoveFileExW(tmp.c_str(), path,
+                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
         {
             DWORD err = GetLastError();
-            DeleteFileW(tmp);
+            DeleteFileW(tmp.c_str());
             return HrFromWin32(err);
         }
     }
 
-    // Clear the read-only attribute if the source had it. A document opened
-    // read-only from a share and then saved would otherwise fail on the next
-    // save with a confusing "access denied" long after the reason.
-    DWORD attrs = GetFileAttributesW(path);
-    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY))
-        SetFileAttributesW(path, attrs & ~static_cast<DWORD>(FILE_ATTRIBUTE_READONLY));
-
+    // The read-only attribute is left untouched, deliberately. Silently
+    // stripping it on save would discard a protection the user set on purpose,
+    // and a word processor has no business deciding otherwise. With the
+    // attribute in place the rename above fails with ERROR_ACCESS_DENIED, which
+    // surfaces through the ordinary save-failure message -- the user is told,
+    // rather than overruled.
     return S_OK;
 }
 

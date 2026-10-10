@@ -96,25 +96,26 @@ double PropVariantGetDecimal(const PROPVARIANT* pv)
     }
 }
 
-// Copies a scalar or already-allocated PROPVARIANT into a destination the
-// framework owns. Only the types the ribbon actually exchanges are handled;
-// anything else is passed through as VT_EMPTY, which tells the framework "no
-// change" and is safe.
+// Copies a PROPVARIANT into a destination the framework owns.
+//
+// A by-value copy is wrong for every owning type: the ribbon's string
+// properties (UI_PKEY_Label, UI_PKEY_TooltipTitle, UI_PKEY_Keytip, ...) are
+// VT_LPWSTR and its image properties are VT_UNKNOWN. The framework calls
+// PropVariantClear on pNewValue while still owning pCurrentValue, so a shallow
+// copy of either type is a double CoTaskMemFree or a double Release.
+//
+// PropVariantCopy is used rather than hand-rolling per-type handling because it
+// lives in ole32.dll -- not propsys.dll -- so it keeps this file's no-propsys
+// constraint while getting every type's ownership rule right, including the
+// ones not listed above.
 void PropVariantCopyShallow(PROPVARIANT* dst, const PROPVARIANT* src)
 {
     if (!dst) return;
-    if (!src) { dst->vt = VT_EMPTY; return; }
+    PropVariantInit(dst);
+    if (!src) return;
 
-    *dst = *src;      // scalars copy correctly by value
-
-    if (src->vt == VT_BSTR && src->bstrVal)
-    {
-        // A BSTR is a heap allocation with a length prefix. Copying the pointer
-        // would give the framework ownership of memory it will PropVariantClear,
-        // while we still believe we own it. Duplicate it.
-        dst->bstrVal = SysAllocString(src->bstrVal);
-        if (!dst->bstrVal) dst->vt = VT_EMPTY;
-    }
+    if (FAILED(PropVariantCopy(dst, src)))
+        PropVariantInit(dst);      // failed copy must not leak a half-filled variant
 }
 
 // ---------------------------------------------------------------------------
@@ -277,9 +278,13 @@ public:
     }
 
     STDMETHODIMP OnDestroyUICommand(UINT /*nCmdID*/, UI_COMMANDTYPE /*typeID*/,
-                                    IUICommandHandler* pHandler) override
+                                    IUICommandHandler* /*pHandler*/) override
     {
-        if (pHandler) pHandler->Release();   // balances OnCreateUICommand's AddRef
+        // Notification only. The reference the framework holds came from
+        // OnCreateUICommand and the FRAMEWORK releases it; releasing it here as
+        // well over-releases the shared RibbonHandler and can delete the object
+        // during ribbon teardown while the framework still holds its
+        // IUIApplication reference.
         return S_OK;
     }
 
@@ -588,6 +593,12 @@ private:
             break;
         }
 
+        // Invalidate the ribbon, not just the chrome. EM_SETPARAFORMAT and
+        // EM_SETCHARFORMAT raise no selection-change notification, so without
+        // this the mutually exclusive toggle buttons (the four alignments,
+        // bullets) keep rendering their previous checked state until some later
+        // event happens to refresh them.
+        m_frame->UpdateRibbonState();
         m_frame->UpdateCaption();
         m_frame->UpdateStatusBar();
     }
@@ -811,7 +822,7 @@ private:
         // Any other font key (kerning, spacing, style, underline colour) is
         // accepted and ignored. Returning S_OK without applying is deliberate:
         // returning an error makes the ribbon mark the control as failed.
-
+        m_frame->UpdateRibbonState();
         m_frame->UpdateCaption();
         m_frame->UpdateStatusBar();
         return S_OK;

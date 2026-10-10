@@ -15,12 +15,11 @@
 #  Invoked from CMakeLists.txt as:
 #    cmake -DCOMMITTED=<path> -DGENERATED=<path> -P VerifyRibbonIds.cmake
 #
-#  The check is intentionally a WARNING, not a fatal error. The generated header
-#  contains the IDs of layout elements and labels that the committed file may
-#  legitimately describe differently (UICC sometimes emits helper symbols for
-#  gallery internals), so a hard failure would block the build on differences
-#  that are harmless. The output lists both sets side by side so a real drift is
-#  visible in one line of the build log.
+#  Value drift and IDs missing from the markup are FATAL: a control bound to the
+#  wrong handler fails silently at runtime, so a green build that hides it is
+#  worse than a red one. IDs UICC emitted that the committed headers do not know
+#  about are reported informationally, because UICC legitimately produces helper
+#  symbols (gallery internals) that no handler needs.
 # ============================================================================
 
 if(NOT EXISTS "${COMMITTED}")
@@ -53,6 +52,20 @@ function(parse_ids lines out_map_name out_count_name)
 endfunction()
 
 parse_ids("${committed_lines}" committed_map committed_count)
+
+# The element IDs live in RibbonIDs.h but every ID_CMD_* handler binding lives in
+# resource.h. Scanning only the former would miss exactly the drift that matters
+# -- a command bound to the wrong handler -- so the command header is parsed too
+# and merged into the same map.
+if(COMMITTED_CMDS AND EXISTS "${COMMITTED_CMDS}")
+  file(STRINGS "${COMMITTED_CMDS}" cmd_lines REGEX "#define[ \t]+ID_[A-Z0-9_]+[ \t]+[0-9]+")
+  parse_ids("${cmd_lines}" cmd_map cmd_count)
+  list(APPEND committed_map ${cmd_map})
+  math(EXPR committed_count "${committed_count}+${cmd_count}")
+else()
+  message(WARNING "VerifyRibbonIds: COMMITTED_CMDS not supplied; command IDs are NOT being checked")
+endif()
+
 parse_ids("${generated_lines}" generated_map generated_count)
 
 message(STATUS "VerifyRibbonIds: committed=${committed_count} generated=${generated_count}")
@@ -117,8 +130,13 @@ foreach(g IN LISTS generated_map)
   endif()
 endforeach()
 
+# Drift is fatal. A ribbon control bound to the wrong handler produces a button
+# that does something else entirely, with no compile or runtime error, so a
+# green build that hides it is worse than a red one. The unhandled-symbol report
+# below stays informational: UICC legitimately emits symbols (gallery internals)
+# that the committed headers need not carry.
 if(_drift)
-  message(WARNING "Ribbon ID drift detected between RibbonIDs.h and the UICC output:\n${_report}")
+  message(FATAL_ERROR "Ribbon ID drift detected between committed headers and the UICC output:\n${_report}")
 else()
   message(STATUS "VerifyRibbonIds: all committed ribbon IDs match the UICC output")
 endif()
