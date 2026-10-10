@@ -1,0 +1,361 @@
+// ============================================================================
+//  LetterPad.rc -- resource script
+//
+//  Built by rc.exe. Everything here is UTF-16 output regardless of this file's
+//  own encoding; the /utf-8 or codepage option on rc.exe controls how it reads
+//  the source. CMake passes the right flag.
+//
+//  THE RIBBON RESOURCE
+//  IDR_RIBBON_BML below #includes the UICC-generated Ribbon.bml. That file is
+//  produced at build time from src/ribbon/Ribbon.xml and does not exist in the
+//  repository. If the build ran with -DLETTERPAD_SKIP_RIBBON, LETTERPAD_NO_RIBBON
+//  is defined and the include is skipped, so the RC still compiles and the app
+//  runs on the fallback toolbar.
+// ============================================================================
+#include <windows.h>
+#include "../src/resource.h"
+
+// ---------------------------------------------------------------------------
+//  Version
+// ---------------------------------------------------------------------------
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    LP_VERSION_MAJOR,LP_VERSION_MINOR,LP_VERSION_PATCH,LP_VERSION_BUILD
+ PRODUCTVERSION LP_VERSION_MAJOR,LP_VERSION_MINOR,LP_VERSION_PATCH,LP_VERSION_BUILD
+ FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+ FILEFLAGS      VS_FF_DEBUG
+#else
+ FILEFLAGS      0x0
+#endif
+ FILEOS         VOS_NT_WINDOWS32
+ FILETYPE       VFT_APP
+ FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        // 0409 = US English, 04B0 = 1200 (Unicode). The pair must match the
+        // language the strings below are actually written in, or version
+        // readers fall back to the neutral block and show nothing.
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "LetterPad Project"
+            VALUE "FileDescription",  "LetterPad"
+            VALUE "FileVersion",      "0.1.0.0"
+            VALUE "InternalName",     "LetterPad"
+            VALUE "LegalCopyright",   "Released into the public domain under the Unlicense."
+            VALUE "OriginalFilename", "LetterPad.exe"
+            VALUE "ProductName",      "LetterPad"
+            VALUE "ProductVersion",   "0.1.0.0"
+            // A short, honest statement of what this program is and is not.
+            // Anyone inspecting the binary should be able to tell at a glance
+            // that it is an independent implementation.
+            VALUE "Comments",         "An original rich-text word processor. Not derived from Microsoft WordPad."
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+// ---------------------------------------------------------------------------
+//  Icons
+//
+//  IDI_LETTERPAD must be the LOWEST numbered icon resource in the file: the
+//  shell uses the first icon group in an executable as the file's icon in
+//  Explorer, regardless of what the window class loads. Numbering it higher
+//  would leave Explorer showing whichever icon happened to be compiled first.
+// ---------------------------------------------------------------------------
+IDI_LETTERPAD        ICON  "icons/letterpad.ico"
+IDI_LETTERPAD_SMALL  ICON  "icons/letterpad_small.ico"
+IDI_DOC_GENERIC      ICON  "icons/doc_generic.ico"
+
+// ---------------------------------------------------------------------------
+//  Ribbon markup (UICC output)
+// ---------------------------------------------------------------------------
+#ifndef LETTERPAD_NO_RIBBON
+IDR_RIBBON_BML  RT_APPLICATION_RIBBON  "Ribbon.bml"
+#endif
+
+// ---------------------------------------------------------------------------
+//  Manifest -- visual styles and DPI awareness
+// ---------------------------------------------------------------------------
+1  RT_MANIFEST  "LetterPad.manifest"
+
+// ---------------------------------------------------------------------------
+//  Accelerators
+//
+//  These are the keyboard bindings. They emit the same ID_CMD_* values as every
+//  other surface, so TranslateAccelerator turns a keystroke into the identical
+//  WM_COMMAND the ribbon would have produced.
+//
+//  VIRTKEY means the number is a virtual-key code, not a character. Without it,
+//  'Z' would be the ASCII value 0x5A -- which happens to equal VK_Z, but '1'
+//  would be 0x31 where VK_1 is also 0x31, so the coincidence holds for
+//  alphanumerics and breaks for everything else. Spelling VIRTKEY is what makes
+//  the punctuation bindings below correct.
+// ---------------------------------------------------------------------------
+IDR_ACCEL ACCELERATORS
+BEGIN
+    "N",            ID_CMD_NEW,           VIRTKEY, CONTROL, NOINVERT
+    "O",            ID_CMD_OPEN,          VIRTKEY, CONTROL, NOINVERT
+    "S",            ID_CMD_SAVE,          VIRTKEY, CONTROL, NOINVERT
+    "P",            ID_CMD_PRINT,         VIRTKEY, CONTROL, NOINVERT
+    "W",            ID_CMD_CLOSE,         VIRTKEY, CONTROL, NOINVERT
+
+    "Z",            ID_CMD_UNDO,          VIRTKEY, CONTROL, NOINVERT
+    "Y",            ID_CMD_REDO,          VIRTKEY, CONTROL, NOINVERT
+    "X",            ID_CMD_CUT,           VIRTKEY, CONTROL, NOINVERT
+    "C",            ID_CMD_COPY,          VIRTKEY, CONTROL, NOINVERT
+    "V",            ID_CMD_PASTE,         VIRTKEY, CONTROL, NOINVERT
+    "A",            ID_CMD_SELECTALL,     VIRTKEY, CONTROL, NOINVERT
+
+    "F",            ID_CMD_FIND,          VIRTKEY, CONTROL, NOINVERT
+    "H",            ID_CMD_REPLACE,       VIRTKEY, CONTROL, NOINVERT
+    "G",            ID_CMD_GOTO,          VIRTKEY, CONTROL, NOINVERT
+
+    "B",            ID_CMD_BOLD,          VIRTKEY, CONTROL, NOINVERT
+    "I",            ID_CMD_ITALIC,        VIRTKEY, CONTROL, NOINVERT
+    "U",            ID_CMD_UNDERLINE,     VIRTKEY, CONTROL, NOINVERT
+
+    "L",            ID_CMD_ALIGN_LEFT,    VIRTKEY, CONTROL, NOINVERT
+    "E",            ID_CMD_ALIGN_CENTER,  VIRTKEY, CONTROL, NOINVERT
+    "R",            ID_CMD_ALIGN_RIGHT,   VIRTKEY, CONTROL, NOINVERT
+    "J",            ID_CMD_ALIGN_JUSTIFY, VIRTKEY, CONTROL, NOINVERT
+
+    VK_ADD,         ID_CMD_ZOOMIN,        VIRTKEY, CONTROL, NOINVERT
+    VK_SUBTRACT,    ID_CMD_ZOOMOUT,       VIRTKEY, CONTROL, NOINVERT
+    "0",            ID_CMD_ZOOM100,       VIRTKEY, CONTROL, NOINVERT
+
+    VK_F12,         ID_CMD_SAVEAS,        VIRTKEY, NOINVERT
+    VK_F1,          ID_CMD_OPTIONS,       VIRTKEY, SHIFT, NOINVERT
+END
+
+// ---------------------------------------------------------------------------
+//  Fallback menu
+//
+//  Used only when the ribbon is unavailable (see AppFrame::CreateFallbackToolbar).
+//  Same command IDs, so the dispatch switch does not care which produced them.
+// ---------------------------------------------------------------------------
+IDR_MENU_FALLBACK MENU
+BEGIN
+    POPUP "&File"
+    BEGIN
+        MENUITEM "&New\tCtrl+N",                ID_CMD_NEW
+        MENUITEM "&Open...\tCtrl+O",            ID_CMD_OPEN
+        MENUITEM "&Save\tCtrl+S",               ID_CMD_SAVE
+        MENUITEM "Save &As...",                 ID_CMD_SAVEAS
+        MENUITEM SEPARATOR
+        MENUITEM "&Print...\tCtrl+P",           ID_CMD_PRINT
+        MENUITEM "Print Pre&view",              ID_CMD_PRINTPREVIEW
+        MENUITEM "Page Set&up...",              ID_CMD_PAGESETUP
+        MENUITEM SEPARATOR
+        MENUITEM "&Close\tCtrl+W",              ID_CMD_CLOSE
+        MENUITEM "E&xit",                       ID_CMD_EXIT
+    END
+    POPUP "&Edit"
+    BEGIN
+        MENUITEM "&Undo\tCtrl+Z",               ID_CMD_UNDO
+        MENUITEM "&Redo\tCtrl+Y",               ID_CMD_REDO
+        MENUITEM SEPARATOR
+        MENUITEM "Cu&t\tCtrl+X",                ID_CMD_CUT
+        MENUITEM "&Copy\tCtrl+C",               ID_CMD_COPY
+        MENUITEM "&Paste\tCtrl+V",              ID_CMD_PASTE
+        MENUITEM "Paste &Special...",           ID_CMD_PASTESPECIAL
+        MENUITEM SEPARATOR
+        MENUITEM "Select &All\tCtrl+A",         ID_CMD_SELECTALL
+        MENUITEM "&Find...\tCtrl+F",            ID_CMD_FIND
+        MENUITEM "R&eplace...\tCtrl+H",         ID_CMD_REPLACE
+        MENUITEM "&Go To...\tCtrl+G",           ID_CMD_GOTO
+    END
+    POPUP "F&ormat"
+    BEGIN
+        MENUITEM "&Bold\tCtrl+B",               ID_CMD_BOLD
+        MENUITEM "&Italic\tCtrl+I",             ID_CMD_ITALIC
+        MENUITEM "&Underline\tCtrl+U",          ID_CMD_UNDERLINE
+        MENUITEM "Stri&kethrough",              ID_CMD_STRIKEOUT
+        MENUITEM SEPARATOR
+        MENUITEM "Align &Left\tCtrl+L",         ID_CMD_ALIGN_LEFT
+        MENUITEM "Align &Center\tCtrl+E",       ID_CMD_ALIGN_CENTER
+        MENUITEM "Align &Right\tCtrl+R",        ID_CMD_ALIGN_RIGHT
+        MENUITEM "&Justify\tCtrl+J",            ID_CMD_ALIGN_JUSTIFY
+        MENUITEM SEPARATOR
+        MENUITEM "&Bullets",                    ID_CMD_BULLETS
+        MENUITEM "Increase &Indent",            ID_CMD_INDENT_INCREASE
+        MENUITEM "Dec&rease Indent",            ID_CMD_INDENT_DECREASE
+        MENUITEM SEPARATOR
+        MENUITEM "No &Wrap",                    ID_CMD_WRAP_NONE
+        MENUITEM "Wrap to &Window",             ID_CMD_WRAP_WINDOW
+        MENUITEM "Wrap to &Ruler",              ID_CMD_WRAP_RULER
+    END
+    POPUP "&Insert"
+    BEGIN
+        MENUITEM "&Date and Time",              ID_CMD_DATETIME
+        MENUITEM "&Picture...",                 ID_CMD_PICTURE
+        MENUITEM "&Object...",                  ID_CMD_OBJECT
+    END
+    POPUP "&View"
+    BEGIN
+        MENUITEM "Zoom &In\tCtrl++",            ID_CMD_ZOOMIN
+        MENUITEM "Zoom &Out\tCtrl+-",           ID_CMD_ZOOMOUT
+        MENUITEM "&100%\tCtrl+0",               ID_CMD_ZOOM100
+        MENUITEM SEPARATOR
+        MENUITEM "&Ruler",                      ID_CMD_RULER
+        MENUITEM "&Status Bar",                 ID_CMD_STATUSBAR
+    END
+    POPUP "&Help"
+    BEGIN
+        MENUITEM "&About LetterPad",            ID_CMD_ABOUT
+    END
+END
+
+// ---------------------------------------------------------------------------
+//  Dialogs
+// ---------------------------------------------------------------------------
+
+// Options. FONT 8 "MS Shell Dlg" is the standard dialog font directive; the
+// numeric 8 is the point size and MS Shell Dlg is resolved by the shell to the
+// correct UI font for the current theme. Hard-coding "Segoe UI" would look wrong
+// on a system configured otherwise.
+IDD_OPTIONS DIALOGEX 0, 0, 260, 210
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "LetterPad Options"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "Default font",                    -1,               7,   4, 246,  88
+    LTEXT           "&Font:",                           -1,              14,  18,  26,   8
+    COMBOBOX                        IDC_OPT_FONTLIST,  44,  16, 130, 120,
+                    CBS_DROPDOWN | CBS_AUTOHSCROLL | CBS_SORT | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "&Size:",                           -1,             182,  18,  22,   8
+    EDITTEXT                        IDC_OPT_SIZEEDIT, 206,  16,  24,  12,
+                    ES_AUTOHSCROLL | ES_NUMBER
+    COMBOBOX                        IDC_OPT_SIZELIST, 232,  16,  16, 120,
+                    CBS_DROPDOWN | WS_VSCROLL | WS_TABSTOP
+
+    // Owner-drawn: painted by OptionsDlgProc's WM_DRAWITEM handler.
+    CONTROL         "",             IDC_OPT_PREVIEW,   "Static",
+                    SS_OWNERDRAW | WS_BORDER,                          14,  36, 232,  48
+
+    GROUPBOX        "Ruler units",                     -1,               7,  98, 120,  40
+    CONTROL         "&Inches",      IDC_OPT_UNITS_INCH, "Button",
+                    BS_AUTORADIOBUTTON | WS_GROUP,                       14, 110,  52,  10
+    CONTROL         "C&entimeters",IDC_OPT_UNITS_CM,    "Button",
+                    BS_AUTORADIOBUTTON,                                  14, 124,  52,  10
+    CONTROL         "&Points",      IDC_OPT_UNITS_PT,   "Button",
+                    BS_AUTORADIOBUTTON,                                  70, 110,  52,  10
+    CONTROL         "P&icas",       IDC_OPT_UNITS_PICA, "Button",
+                    BS_AUTORADIOBUTTON,                                  70, 124,  52,  10
+
+    GROUPBOX        "Word wrap",                       -1,             133,  98, 120,  40
+    CONTROL         "&No wrap",     IDC_OPT_WRAP_NONE,   "Button",
+                    BS_AUTORADIOBUTTON | WS_GROUP,                      140, 110,  52,  10
+    CONTROL         "Wrap to &window", IDC_OPT_WRAP_WINDOW, "Button",
+                    BS_AUTORADIOBUTTON,                                 140, 124,  70,  10
+    CONTROL         "Wrap to &ruler",  IDC_OPT_WRAP_RULER,  "Button",
+                    BS_AUTORADIOBUTTON,                                 200, 110,  50,  10
+
+    GROUPBOX        "General",                         -1,               7, 142, 246,  44
+    CONTROL         "Show &ruler",      IDC_OPT_RULER,      "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP,                        14, 154,  70,  10
+    CONTROL         "Show &status bar", IDC_OPT_STATUSBAR,  "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP,                        14, 168,  70,  10
+    CONTROL         "Save new documents as &RTF", IDC_OPT_RTFDEFAULT, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP,                       100, 154, 140,  10
+
+    DEFPUSHBUTTON   "OK",            IDOK,             150, 192,  50,  14
+    PUSHBUTTON      "Cancel",        IDCANCEL,         204, 192,  50,  14
+END
+
+IDD_GOTO DIALOGEX 0, 0, 150, 52
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Go To"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "&Page number:",  -1,               8,  10,  50,   8
+    EDITTEXT        IDC_GOTO_PAGE,   62,   8,  40,  12, ES_AUTOHSCROLL | ES_NUMBER
+    DEFPUSHBUTTON   "Go To",         IDOK,             8,  30,  62,  14
+    PUSHBUTTON      "Cancel",        IDCANCEL,        78,  30,  62,  14
+END
+
+IDD_PRINTPREVIEW DIALOGEX 0, 0, 320, 240
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME
+CAPTION "Print Preview"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    // SS_BITMAP is what makes STM_SETIMAGE work: without it the static ignores
+    // the message entirely and the preview stays blank.
+    CONTROL         "",             IDC_PP_PREVIEW, "Static",
+                    SS_BITMAP | SS_SUNKEN | WS_BORDER,                   8,   8, 304, 200
+
+    LTEXT           "Page 1 of 1",  IDC_PP_PAGELABEL,                    8, 216,  70,  10, SS_CENTERIMAGE
+    PUSHBUTTON      "< &Previous",  IDC_PP_PREVPAGE,                    84, 214,  50,  14
+    PUSHBUTTON      "&Next >",      IDC_PP_NEXTPAGE,                   138, 214,  50,  14
+    PUSHBUTTON      "Zoom &In",     IDC_PP_ZOOMIN,                     192, 214,  40,  14
+    PUSHBUTTON      "Zoom &Out",    IDC_PP_ZOOMOUT,                    234, 214,  40,  14
+    PUSHBUTTON      "&Close",       IDC_PP_CLOSE,                      278, 214,  34,  14
+END
+
+IDD_ABOUT DIALOGEX 0, 0, 220, 90
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "About LetterPad"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "",             IDC_ABOUT_TEXT,    10,  10, 200,  56
+    DEFPUSHBUTTON   "OK",           IDOK,              85,  70,  50,  14
+END
+
+// ---------------------------------------------------------------------------
+//  String table
+//
+//  Every string the code loads by ID is here. Strings the code builds inline
+//  (dialog captions, status messages that are pure formatting) are deliberately
+//  NOT here: a string table entry that no LoadStr call reads is dead weight, and
+//  one that is read but not present is a blank UI. Keeping the two sets in sync
+//  is a review task, not something the compiler can check.
+// ---------------------------------------------------------------------------
+STRINGTABLE
+BEGIN
+    IDS_APPNAME             "LetterPad"
+    IDS_APPDESCRIPTION      "LetterPad - an original rich-text word processor"
+    IDS_UNTITLED            "Document"
+    IDS_READY               "Ready"
+
+    IDS_FMT_RTF             "Rich Text Format"
+    IDS_FMT_DOCX            "Office Open XML Document"
+    IDS_FMT_ODT             "OpenDocument Text"
+    IDS_FMT_TXT             "Text Document"
+    IDS_FMT_WRI             "Write Document"
+
+    IDS_FILTER_ALLDOCS      "All LetterPad Documents"
+    IDS_FILTER_RTF          "Rich Text Format"
+    IDS_FILTER_DOCX         "Office Open XML Document"
+    IDS_FILTER_ODT          "OpenDocument Text"
+    IDS_FILTER_TXT          "Text Document"
+    IDS_FILTER_ALLFILES     "All Files"
+
+    IDS_ERR_OPENFILE        "LetterPad cannot open this file. It may be in use by another program, or it may not be a document LetterPad can read."
+    IDS_ERR_OPENFILE_CAP    "Open failed"
+    IDS_ERR_SAVEFILE        "LetterPad cannot save this file. The disk may be full, the file may be read-only, or another program may have it open."
+    IDS_ERR_SAVEFILE_CAP    "Save failed"
+    IDS_ERR_UNSAVED         "Unsaved changes"
+    IDS_ERR_UNSAVED_CAP     "LetterPad"
+    IDS_ERR_NORICHEDIT      "LetterPad could not start because the Rich Edit control (msftedit.dll) is not available on this system."
+    IDS_ERR_NORICHEDIT_CAP  "LetterPad cannot start"
+    IDS_ERR_PRINT           "LetterPad could not print the document. Check that a printer is installed and that it is turned on."
+    IDS_ERR_PRINT_CAP       "Print failed"
+    IDS_ERR_CODEC           "LetterPad cannot read or write this file format yet. Rich Text Format (.rtf) and plain text (.txt) are fully supported."
+    IDS_ERR_CODEC_CAP       "Unsupported format"
+    IDS_ERR_FINDWRAP        "LetterPad has finished searching the document."
+
+    IDS_CAPTION_DIRTY       "*"
+    IDS_STATUS_POS          "Ln %d, Col %d"
+    IDS_STATUS_ZOOM         "%d%%"
+    IDS_STATUS_SEARCHDONE   "Search complete."
+
+    IDS_OPT_INCHES          "inches"
+    IDS_OPT_CENTIMETERS     "centimeters"
+    IDS_OPT_POINTS          "points"
+    IDS_OPT_PICAS           "picas"
+
+    IDS_ABOUT_TEXT          "LetterPad %d.%d.%d\n\nAn original rich-text word processor built on the documented RichEdit 4.1 and Windows Ribbon APIs.\n\nNot affiliated with, derived from, or a reproduction of Microsoft WordPad."
+END
