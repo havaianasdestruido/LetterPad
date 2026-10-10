@@ -1,0 +1,64 @@
+# ============================================================================
+#  .gitignore
+#
+#  Two categories here, and the comment on the second one matters:
+#
+#  1. Ordinary build output. Nothing generated should be committed.
+#
+#  2. Build output that lives INSIDE the source tree. res/Ribbon.bml is produced
+#     by UICC from src/ribbon/Ribbon.xml, and rc.exe can only find it in the
+#     directory of the .rc that references it -- there is no search path for
+#     binary resource payloads. So it is written into res/ and must be ignored.
+#     It is regenerated on every build; committing it would mean committing a
+#     compiled artifact that silently goes stale.
+#
+#  A note on what is deliberately NOT ignored: nothing else is produced in the
+#  source tree. If a new generated file appears in res/ or src/, add it here
+#  rather than letting it get committed as if it were authored.
+# ============================================================================
+
+# -- build directories -------------------------------------------------------
+build/
+build32/
+build64/
+out/
+cmake-build-*/
+.vs/
+*.vcxproj
+*.vcxproj.*
+*.sln
+*.suo
+*.user
+
+# -- compiler and linker output ----------------------------------------------
+*.obj
+*.o
+*.ilk
+*.pdb
+*.idb
+*.exp
+*.lib
+*.dll
+*.exe
+*.exe.manifest.bak
+*.res
+
+# -- generated ribbon artifacts ----------------------------------------------
+# See the header comment: generated in-tree by design, never committed.
+res/Ribbon.bml
+src/ribbon/RibbonIDs_gen.h
+
+# -- editor and OS cruft ------------------------------------------------------
+*.orig
+*.rej
+*~
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# -- scratch ------------------------------------------------------------------
+# Anything a contributor dropped in for a one-off experiment.
+scratch/
+tmp/

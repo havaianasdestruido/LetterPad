@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  LetterPad.manifest
+
+  TWO THINGS THIS FILE CONTROLS, AND BOTH ARE LOAD-BEARING:
+
+  1. ComCtl32 v6. Without the dependentAssembly entry below, LetterPad links
+     against comctl32 v5, which has no visual styles: buttons render as grey
+     Windows 95 rectangles, the status bar has no themed panes, and the zoom
+     trackbar looks like it belongs to a different decade. The ribbon also
+     requires v6.
+
+  2. DPI awareness. Declared as PerMonitorV2 with a fallback chain. The order
+     matters and is not cosmetic:
+       - PerMonitorV2  Windows 10 1703+. The window is told about DPI changes
+                       via WM_DPICHANGED and scales its own non-client area.
+       - PerMonitor    Windows 8.1. Same notification, no non-client scaling.
+       - System        Windows 7/8. Bitmap-stretched on secondary monitors,
+                       but correct on the primary. This is the floor, and it is
+                       what makes LetterPad usable at all on Windows 7, which
+                       has no per-monitor concept.
+     Declaring only PerMonitorV2 would leave Windows 7 treating the process as
+     DPI-unaware and bitmap-stretching the ENTIRE window, which is blurry
+     everywhere rather than blurry only on a mismatched secondary monitor.
+
+  gdiScaling is not enabled. It would ask the system to bitmap-scale GDI output
+  on DPI change, but LetterPad handles WM_DPICHANGED itself and recomputes the
+  ruler and status bar heights from the new DPI. Enabling both would scale
+  twice.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+
+  <assemblyIdentity
+      version="0.1.0.0"
+      processorArchitecture="*"
+      name="LetterPad"
+      type="win32"/>
+
+  <description>LetterPad - an original rich-text word processor</description>
+
+  <!-- ComCtl32 v6: visual styles and the ribbon. -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+          type="win32"
+          name="Microsoft.Windows.Common-Controls"
+          version="6.0.0.0"
+          processorArchitecture="*"
+          publicKeyToken="6595b64144ccf1df"
+          language="*"/>
+    </dependentAssembly>
+  </dependency>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">
+        PerMonitorV2, PerMonitor, System
+      </dpiAwareness>
+      <!-- Legacy flag retained for Windows 8.0 and earlier, which do not
+           understand dpiAwareness. Both are present on purpose; newer systems
+           read dpiAwareness and ignore dpiAware, older systems do the reverse. -->
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">
+        true/pm
+      </dpiAware>
+      <!-- Long paths: a document can legitimately live deeper than 260
+           characters, and without this LetterPad reports "cannot open" on a
+           path that Explorer opens fine. -->
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">
+        true
+      </longPathAware>
+      <!-- Active-code-page UTF-8. The sources are UTF-8 and /utf-8 is passed to
+           MSVC, but the ACP still governs how the CRT interprets narrow strings
+           coming from the environment. Setting this removes a whole class of
+           mojibake on non-Latin locales. Requires Windows 10 1903+; ignored
+           silently on older systems. -->
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">
+        UTF-8
+      </activeCodePage>
+    </windowsSettings>
+  </application>
+
+  <!-- Compatibility section. Listing the supported OS GUIDs is what makes
+       GetVersionEx and the IsWindows*OrGreater helpers report the true version
+       rather than 6.2, which is what an unmanifested process gets on every
+       Windows from 8.1 onward. LetterPad does not gate on version today, but
+       without this any future version check would silently misreport. -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 7 -->
+      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>
+      <!-- Windows 8 -->
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/>
+      <!-- Windows 8.1 -->
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>
+      <!-- Windows 10 / 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <!-- asInvoker. A word processor has no business elevating, and
+             requesting more would put a UAC prompt between the user and their
+             document on every launch. -->
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+</assembly>

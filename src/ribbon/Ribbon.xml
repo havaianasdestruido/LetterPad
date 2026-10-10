@@ -1,0 +1,424 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ============================================================================
+   Ribbon.xml -- LetterPad ribbon markup (UICC input)
+  ============================================================================
+
+   Compiled by uicc.exe into a .bml blob that the RC script embeds as
+   RT_APPLICATION_RIBBON and IUIFramework::LoadUI consumes at startup.
+   See docs/BUILD.md for the exact command line.
+
+   EVERY Command below carries an explicit Id= and Symbol=. The Symbol matches
+   a #define in RibbonIDs.h, which is hand-written and committed; the CMake
+   target `verify-ribbon-ids` diffs the two and fails the build on drift. Do
+   not remove an Id= attribute -- UICC will renumber everything below it.
+
+   LAYOUT NOTES
+   ------------
+   The tab and group structure mirrors the classic Windows 7 WordPad ribbon:
+   Home (Clipboard | Font | Paragraph | Insert | Editing), Insert, and View
+   (Zoom | Show or hide). The composite FontControl on the Home tab is the same
+   control WordPad uses -- one RichFont control that reports family, size,
+   bold/italic/underline, strikeout, sub/superscript, text colour and
+   highlight colour as UI_PKEY_* properties rather than as separate commands.
+   RibbonHandler.cpp translates those property changes into the discrete
+   ID_CMD_* values used by the fallback toolbar and the accelerator table, so
+   formatting has exactly one implementation regardless of which surface
+   triggered it.
+
+   Size definitions are the SDK built-ins (OneButton, TwoButtons,
+   ThreeButtons, FiveButtons, FontControl). Built-ins are used deliberately
+   instead of hand-written <Ribbon.SizeDefinitions> blocks: a custom
+   ScalingPolicy is easy to get subtly wrong, and the symptom is a ribbon that
+   collapses controls unexpectedly at narrow widths rather than a compile
+   error. If a built-in name is ever rejected by a newer SDK, the built-in
+   list is in the Windows Ribbon "Predefined Size Definitions" documentation
+   and swapping one is a one-word change.
+
+   Nothing here is localised. UICC can take a localisation file, but the
+   string table in res/LetterPad.rc is the app's only localisation surface and
+   adding a second one guarantees the two drift apart.
+-->
+<Application xmlns="http://schemas.microsoft.com/windows/2009/Ribbon">
+
+  <Application.Commands>
+
+    <!-- ===================== ribbon layout elements ====================== -->
+    <Command Name="cmdTabHome"          Id="3"   Symbol="ID_TAB_HOME"
+             LabelTitle="Home"/>
+    <Command Name="cmdTabInsert"        Id="4"   Symbol="ID_TAB_INSERT"
+             LabelTitle="Insert"/>
+    <Command Name="cmdTabView"          Id="5"   Symbol="ID_TAB_VIEW"
+             LabelTitle="View"/>
+
+    <Command Name="cmdGroupClipboard"   Id="6"   Symbol="ID_GROUP_CLIPBOARD"/>
+    <Command Name="cmdGroupFont"        Id="7"   Symbol="ID_GROUP_FONT"/>
+    <Command Name="cmdGroupParagraph"   Id="8"   Symbol="ID_GROUP_PARAGRAPH"/>
+    <Command Name="cmdGroupInsert"      Id="9"   Symbol="ID_GROUP_INSERT"/>
+    <Command Name="cmdGroupEditing"     Id="10"  Symbol="ID_GROUP_EDITING"/>
+    <Command Name="cmdGroupZoom"        Id="11"  Symbol="ID_GROUP_ZOOM"/>
+    <Command Name="cmdGroupShowHide"    Id="12"  Symbol="ID_GROUP_SHOWHIDE"/>
+
+    <Command Name="cmdRibbonRoot"       Id="13"  Symbol="ID_RIBBON_ROOT"/>
+    <Command Name="cmdQAT"              Id="14"  Symbol="ID_RIBBON_QAT"/>
+
+    <Command Name="cmdLblClipboard"     Id="100" Symbol="ID_LBL_CLIPBOARD"  LabelTitle="Clipboard"/>
+    <Command Name="cmdLblFont"          Id="101" Symbol="ID_LBL_FONT"       LabelTitle="Font"/>
+    <Command Name="cmdLblParagraph"     Id="102" Symbol="ID_LBL_PARAGRAPH"  LabelTitle="Paragraph"/>
+    <Command Name="cmdLblInsert"        Id="103" Symbol="ID_LBL_INSERT"     LabelTitle="Insert"/>
+    <Command Name="cmdLblEditing"       Id="104" Symbol="ID_LBL_EDITING"    LabelTitle="Editing"/>
+    <Command Name="cmdLblZoom"          Id="105" Symbol="ID_LBL_ZOOM"       LabelTitle="Zoom"/>
+    <Command Name="cmdLblShowHide"      Id="106" Symbol="ID_LBL_SHOWHIDE"   LabelTitle="Show or hide"/>
+
+    <!-- ===================== application menu =========================== -->
+    <Command Name="cmdAppMenu"          Id="2"   Symbol="ID_CMD_APPMENU"
+             LabelTitle="LetterPad"
+             TooltipTitle="LetterPad menu"
+             TooltipDescription="New, open, save, print and application options."/>
+
+    <Command Name="cmdNew"              Id="20"  Symbol="ID_CMD_NEW"
+             LabelTitle="New"  LabelDescription="New"
+             TooltipTitle="New (Ctrl+N)"
+             TooltipDescription="Create a new LetterPad document."/>
+    <Command Name="cmdOpen"             Id="21"  Symbol="ID_CMD_OPEN"
+             LabelTitle="Open" LabelDescription="Open"
+             TooltipTitle="Open (Ctrl+O)"
+             TooltipDescription="Open an existing document."/>
+    <Command Name="cmdSave"             Id="22"  Symbol="ID_CMD_SAVE"
+             LabelTitle="Save" LabelDescription="Save"
+             TooltipTitle="Save (Ctrl+S)"
+             TooltipDescription="Save the current document."/>
+    <Command Name="cmdSaveAs"           Id="34"  Symbol="ID_CMD_SAVEAS"
+             LabelTitle="Save as" LabelDescription="Save as"
+             TooltipTitle="Save as"
+             TooltipDescription="Save the document in a different format."/>
+    <Command Name="cmdSaveAsRtf"        Id="23"  Symbol="ID_CMD_SAVEAS_RTF"
+             LabelTitle="Rich Text Format"
+             TooltipTitle="Save as Rich Text Format"
+             TooltipDescription="Keeps all formatting. The default LetterPad format."/>
+    <Command Name="cmdSaveAsDocx"       Id="24"  Symbol="ID_CMD_SAVEAS_DOCX"
+             LabelTitle="Office Open XML Document"
+             TooltipTitle="Save as Office Open XML Document"
+             TooltipDescription="Compatible with Word 2007 and later."/>
+    <Command Name="cmdSaveAsOdt"        Id="25"  Symbol="ID_CMD_SAVEAS_ODT"
+             LabelTitle="OpenDocument Text"
+             TooltipTitle="Save as OpenDocument Text"
+             TooltipDescription="Compatible with OpenOffice and LibreOffice Writer."/>
+    <Command Name="cmdSaveAsTxt"        Id="26"  Symbol="ID_CMD_SAVEAS_TXT"
+             LabelTitle="Plain Text"
+             TooltipTitle="Save as Plain Text"
+             TooltipDescription="All formatting is discarded."/>
+    <Command Name="cmdPrintMenu"        Id="35"  Symbol="ID_CMD_PRINTMENU"
+             LabelTitle="Print" LabelDescription="Print"
+             TooltipTitle="Print"
+             TooltipDescription="Print, quick print, preview or page setup."/>
+    <Command Name="cmdPrint"            Id="27"  Symbol="ID_CMD_PRINT"
+             LabelTitle="Print"
+             TooltipTitle="Print (Ctrl+P)"
+             TooltipDescription="Select a printer and print the document."/>
+    <Command Name="cmdQuickPrint"       Id="28"  Symbol="ID_CMD_QUICKPRINT"
+             LabelTitle="Quick print"
+             TooltipTitle="Quick print"
+             TooltipDescription="Send the document straight to the default printer."/>
+    <Command Name="cmdPrintPreview"     Id="29"  Symbol="ID_CMD_PRINTPREVIEW"
+             LabelTitle="Print preview"
+             TooltipTitle="Print preview"
+             TooltipDescription="Preview the document as it will print."/>
+    <Command Name="cmdPageSetup"        Id="30"  Symbol="ID_CMD_PAGESETUP"
+             LabelTitle="Page setup"
+             TooltipTitle="Page setup"
+             TooltipDescription="Choose paper size, orientation and margins."/>
+    <Command Name="cmdClose"            Id="31"  Symbol="ID_CMD_CLOSE"
+             LabelTitle="Close"
+             TooltipTitle="Close"
+             TooltipDescription="Close this window."/>
+    <Command Name="cmdOptions"          Id="32"  Symbol="ID_CMD_OPTIONS"
+             LabelTitle="LetterPad Options"
+             TooltipTitle="LetterPad Options"
+             TooltipDescription="Change the default font, ruler units and word wrap."/>
+    <Command Name="cmdExit"             Id="33"  Symbol="ID_CMD_EXIT"
+             LabelTitle="Exit LetterPad"
+             TooltipTitle="Exit LetterPad"
+             TooltipDescription="Close all LetterPad windows."/>
+
+    <!-- ===================== editing =================================== -->
+    <Command Name="cmdUndo"             Id="40"  Symbol="ID_CMD_UNDO"
+             LabelTitle="Undo"
+             TooltipTitle="Undo (Ctrl+Z)"
+             TooltipDescription="Reverse the last change."/>
+    <Command Name="cmdRedo"             Id="41"  Symbol="ID_CMD_REDO"
+             LabelTitle="Redo"
+             TooltipTitle="Redo (Ctrl+Y)"
+             TooltipDescription="Reapply the last change you undid."/>
+    <Command Name="cmdCut"              Id="42"  Symbol="ID_CMD_CUT"
+             LabelTitle="Cut"
+             TooltipTitle="Cut (Ctrl+X)"
+             TooltipDescription="Move the selection to the clipboard."/>
+    <Command Name="cmdCopy"             Id="43"  Symbol="ID_CMD_COPY"
+             LabelTitle="Copy"
+             TooltipTitle="Copy (Ctrl+C)"
+             TooltipDescription="Copy the selection to the clipboard."/>
+    <Command Name="cmdPaste"            Id="44"  Symbol="ID_CMD_PASTE"
+             LabelTitle="Paste"
+             TooltipTitle="Paste (Ctrl+V)"
+             TooltipDescription="Insert the clipboard contents."/>
+    <Command Name="cmdPasteSpecial"     Id="45"  Symbol="ID_CMD_PASTESPECIAL"
+             LabelTitle="Paste special"
+             TooltipTitle="Paste special"
+             TooltipDescription="Insert the clipboard contents in a chosen format."/>
+    <Command Name="cmdSelectAll"        Id="46"  Symbol="ID_CMD_SELECTALL"
+             LabelTitle="Select all"
+             TooltipTitle="Select all (Ctrl+A)"
+             TooltipDescription="Select the whole document."/>
+    <Command Name="cmdFind"             Id="47"  Symbol="ID_CMD_FIND"
+             LabelTitle="Find"
+             TooltipTitle="Find (Ctrl+F)"
+             TooltipDescription="Search the document for text."/>
+    <Command Name="cmdReplace"          Id="48"  Symbol="ID_CMD_REPLACE"
+             TooltipTitle="Replace (Ctrl+H)"
+             LabelTitle="Replace"
+             TooltipDescription="Search for text and replace it."/>
+    <Command Name="cmdGoto"             Id="49"  Symbol="ID_CMD_GOTO"
+             LabelTitle="Go to"
+             TooltipTitle="Go to (Ctrl+G)"
+             TooltipDescription="Jump to a page number."/>
+
+    <!-- ===================== font ====================================== -->
+    <!-- One composite control. Its state is read and written through
+         UI_PKEY_FontProperties / FontSize / ForegroundColor /
+         BackgroundColor / Underline / Strikethrough / VerticalPositioning,
+         handled in RibbonHandler::UpdateProperty and ::Execute. -->
+    <Command Name="cmdFontControl"      Id="60"  Symbol="ID_CMD_FONTCONTROL"
+             LabelTitle="Font"
+             TooltipTitle="Font"
+             TooltipDescription="Change the font, size, style and colour of the selection."/>
+    <!-- Discrete equivalents. Not placed on the ribbon -- the FontControl
+         covers them -- but the accelerator table and the fallback toolbar
+         bind to these, and RibbonHandler funnels property changes into them
+         so that formatting logic exists exactly once. -->
+    <Command Name="cmdBold"             Id="61"  Symbol="ID_CMD_BOLD"          LabelTitle="Bold"/>
+    <Command Name="cmdItalic"           Id="62"  Symbol="ID_CMD_ITALIC"        LabelTitle="Italic"/>
+    <Command Name="cmdUnderline"        Id="63"  Symbol="ID_CMD_UNDERLINE"     LabelTitle="Underline"/>
+    <Command Name="cmdStrikeout"        Id="64"  Symbol="ID_CMD_STRIKEOUT"     LabelTitle="Strikethrough"/>
+    <Command Name="cmdSubscript"        Id="65"  Symbol="ID_CMD_SUBSCRIPT"     LabelTitle="Subscript"/>
+    <Command Name="cmdSuperscript"      Id="66"  Symbol="ID_CMD_SUPERSCRIPT"   LabelTitle="Superscript"/>
+    <Command Name="cmdFontColor"        Id="67"  Symbol="ID_CMD_FONTCOLOR"     LabelTitle="Font colour"/>
+    <Command Name="cmdHighlightColor"   Id="68"  Symbol="ID_CMD_HIGHLIGHTCOLOR" LabelTitle="Highlight colour"/>
+
+    <!-- ===================== paragraph ================================= -->
+    <Command Name="cmdBullets"          Id="70"  Symbol="ID_CMD_BULLETS"
+             LabelTitle="Bullets"
+             TooltipTitle="Bullets"
+             TooltipDescription="Start or stop a bulleted list."/>
+    <Command Name="cmdAlignLeft"        Id="71"  Symbol="ID_CMD_ALIGN_LEFT"
+             LabelTitle="Left"
+             TooltipTitle="Align left (Ctrl+L)"
+             TooltipDescription="Align text to the left margin."/>
+    <Command Name="cmdAlignCenter"      Id="72"  Symbol="ID_CMD_ALIGN_CENTER"
+             LabelTitle="Center"
+             TooltipTitle="Centre (Ctrl+E)"
+             TooltipDescription="Centre text between the margins."/>
+    <Command Name="cmdAlignRight"       Id="73"  Symbol="ID_CMD_ALIGN_RIGHT"
+             LabelTitle="Right"
+             TooltipTitle="Align right (Ctrl+R)"
+             TooltipDescription="Align text to the right margin."/>
+    <Command Name="cmdAlignJustify"     Id="74"  Symbol="ID_CMD_ALIGN_JUSTIFY"
+             LabelTitle="Justify"
+             TooltipTitle="Justify (Ctrl+J)"
+             TooltipDescription="Space text evenly between the margins."/>
+    <Command Name="cmdLineSpacing"      Id="75"  Symbol="ID_CMD_LINESPACING"
+             LabelTitle="Line spacing"
+             TooltipTitle="Line spacing"
+             TooltipDescription="Choose the spacing between lines."/>
+    <Command Name="cmdIndentIncrease"   Id="76"  Symbol="ID_CMD_INDENT_INCREASE"
+             LabelTitle="Increase indent"
+             TooltipTitle="Increase indent"
+             TooltipDescription="Move the paragraph further from the margin."/>
+    <Command Name="cmdIndentDecrease"   Id="77"  Symbol="ID_CMD_INDENT_DECREASE"
+             LabelTitle="Decrease indent"
+             TooltipTitle="Decrease indent"
+             TooltipDescription="Move the paragraph closer to the margin."/>
+
+    <Command Name="cmdLineSpacingSingle"   Id="110" Symbol="ID_CMD_LINESPACING_SINGLE"   LabelTitle="1.0"/>
+    <Command Name="cmdLineSpacingOneHalf"  Id="111" Symbol="ID_CMD_LINESPACING_ONEHALF"  LabelTitle="1.15"/>
+    <Command Name="cmdLineSpacingDouble"   Id="112" Symbol="ID_CMD_LINESPACING_DOUBLE"   LabelTitle="2.0"/>
+    <Command Name="cmdLineSpacingOptions"  Id="113" Symbol="ID_CMD_LINESPACING_OPTIONS"  LabelTitle="Line spacing options..."/>
+
+    <!-- ===================== insert ==================================== -->
+    <Command Name="cmdDateTime"         Id="80"  Symbol="ID_CMD_DATETIME"
+             LabelTitle="Date and time"
+             TooltipTitle="Date and time"
+             TooltipDescription="Insert the current date and time."/>
+    <Command Name="cmdObject"           Id="81"  Symbol="ID_CMD_OBJECT"
+             LabelTitle="Object"
+             TooltipTitle="Object"
+             TooltipDescription="Insert an embedded object, such as a Paint document."/>
+    <Command Name="cmdPicture"          Id="82"  Symbol="ID_CMD_PICTURE"
+             LabelTitle="Picture"
+             TooltipTitle="Picture"
+             TooltipDescription="Insert a picture from a file."/>
+
+    <!-- ===================== view ====================================== -->
+    <Command Name="cmdZoomIn"           Id="90"  Symbol="ID_CMD_ZOOMIN"
+             LabelTitle="Zoom in"
+             TooltipTitle="Zoom in"
+             TooltipDescription="Make the text appear larger."/>
+    <Command Name="cmdZoomOut"          Id="91"  Symbol="ID_CMD_ZOOMOUT"
+             LabelTitle="Zoom out"
+             TooltipTitle="Zoom out"
+             TooltipDescription="Make the text appear smaller."/>
+    <Command Name="cmdZoom100"          Id="92"  Symbol="ID_CMD_ZOOM100"
+             LabelTitle="100%"
+             TooltipTitle="100%"
+             TooltipDescription="Return the document to its actual size."/>
+    <Command Name="cmdRuler"            Id="93"  Symbol="ID_CMD_RULER"
+             LabelTitle="Ruler"
+             TooltipTitle="Ruler"
+             TooltipDescription="Show or hide the ruler above the document."/>
+    <Command Name="cmdStatusBar"        Id="94"  Symbol="ID_CMD_STATUSBAR"
+             LabelTitle="Status bar"
+             TooltipTitle="Status bar"
+             TooltipDescription="Show or hide the status bar at the bottom of the window."/>
+    <Command Name="cmdWrapNone"         Id="95"  Symbol="ID_CMD_WRAP_NONE"   LabelTitle="No wrap"/>
+    <Command Name="cmdWrapWindow"       Id="96"  Symbol="ID_CMD_WRAP_WINDOW" LabelTitle="Wrap to window"/>
+    <Command Name="cmdWrapRuler"        Id="97"  Symbol="ID_CMD_WRAP_RULER"  LabelTitle="Wrap to ruler"/>
+
+  </Application.Commands>
+
+  <Application.Views>
+    <Ribbon Name="LETTERPAD_RIBBON">
+
+      <!-- ==================== application menu ========================== -->
+      <Ribbon.ApplicationMenu>
+        <ApplicationMenu CommandName="cmdAppMenu">
+
+          <MenuGroup Class="StandardItems">
+            <Button CommandName="cmdNew"/>
+            <Button CommandName="cmdOpen"/>
+            <Button CommandName="cmdSave"/>
+
+            <DropDownButton CommandName="cmdSaveAs">
+              <MenuGroup>
+                <Button CommandName="cmdSaveAsRtf"/>
+                <Button CommandName="cmdSaveAsDocx"/>
+                <Button CommandName="cmdSaveAsOdt"/>
+                <Button CommandName="cmdSaveAsTxt"/>
+              </MenuGroup>
+            </DropDownButton>
+
+            <DropDownButton CommandName="cmdPrintMenu">
+              <MenuGroup>
+                <Button CommandName="cmdPrint"/>
+                <Button CommandName="cmdQuickPrint"/>
+                <Button CommandName="cmdPrintPreview"/>
+                <Button CommandName="cmdPageSetup"/>
+              </MenuGroup>
+            </DropDownButton>
+
+            <Button CommandName="cmdClose"/>
+          </MenuGroup>
+
+          <MenuGroup Class="MajorItems">
+            <Button CommandName="cmdOptions"/>
+            <Button CommandName="cmdExit"/>
+          </MenuGroup>
+
+        </ApplicationMenu>
+      </Ribbon.ApplicationMenu>
+
+      <!-- ==================== quick access toolbar ====================== -->
+      <!-- Items listed under ApplicationDefaults with IsChecked="true" are
+           visible on first run; the user can then customise the QAT, and the
+           ribbon framework persists that customisation itself. -->
+      <Ribbon.QuickAccessToolbar>
+        <QuickAccessToolbar CommandName="cmdQAT" ApplicationDefaults.IsCollapsed="false">
+          <QuickAccessToolbar.ApplicationDefaults>
+            <Button CommandName="cmdSave"  ApplicationDefaults.IsChecked="true"/>
+            <Button CommandName="cmdUndo"  ApplicationDefaults.IsChecked="true"/>
+            <Button CommandName="cmdRedo"  ApplicationDefaults.IsChecked="true"/>
+          </QuickAccessToolbar.ApplicationDefaults>
+        </QuickAccessToolbar>
+      </Ribbon.QuickAccessToolbar>
+
+      <!-- ==================== tabs ====================================== -->
+      <Ribbon.Tabs>
+
+        <!-- ------------------------- HOME ------------------------------- -->
+        <Tab CommandName="cmdTabHome">
+
+          <Group CommandName="cmdGroupClipboard"
+                 SizeDefinition="OneBigButton-TwoSmallButtons">
+            <Button CommandName="cmdPaste"/>
+            <Button CommandName="cmdCut"/>
+            <Button CommandName="cmdCopy"/>
+          </Group>
+
+          <!-- One composite RichFont control: family, size, bold, italic,
+               underline, strikeout, sub/superscript, text colour and
+               highlight colour. "RichFont" (rather than "Font" or
+               "FontWithColor") is the variant that exposes the highlight
+               colour and the vertical-positioning properties, which is what
+               a word processor needs. -->
+          <Group CommandName="cmdGroupFont" SizeDefinition="FontControl">
+            <FontControl CommandName="cmdFontControl"
+                         FontType="RichFont"
+                         HasVerticalPositioning="true"/>
+          </Group>
+
+          <Group CommandName="cmdGroupParagraph"
+                 SizeDefinition="OneBigButton-FourSmallButtons">
+            <ToggleButton CommandName="cmdBullets"/>
+            <ToggleButton CommandName="cmdAlignLeft"/>
+            <ToggleButton CommandName="cmdAlignCenter"/>
+            <ToggleButton CommandName="cmdAlignRight"/>
+            <DropDownButton CommandName="cmdLineSpacing">
+              <MenuGroup>
+                <Button CommandName="cmdLineSpacingSingle"/>
+                <Button CommandName="cmdLineSpacingOneHalf"/>
+                <Button CommandName="cmdLineSpacingDouble"/>
+                <Button CommandName="cmdLineSpacingOptions"/>
+              </MenuGroup>
+            </DropDownButton>
+          </Group>
+
+          <Group CommandName="cmdGroupInsert" SizeDefinition="ThreeButtons">
+            <Button CommandName="cmdDateTime"/>
+            <Button CommandName="cmdObject"/>
+            <Button CommandName="cmdPicture"/>
+          </Group>
+
+          <Group CommandName="cmdGroupEditing" SizeDefinition="ThreeButtons">
+            <Button CommandName="cmdFind"/>
+            <Button CommandName="cmdReplace"/>
+            <Button CommandName="cmdSelectAll"/>
+          </Group>
+
+        </Tab>
+
+        <!-- ------------------------- INSERT ----------------------------- -->
+        <Tab CommandName="cmdTabInsert">
+          <Group CommandName="cmdGroupInsert" SizeDefinition="ThreeButtons">
+            <Button CommandName="cmdDateTime"/>
+            <Button CommandName="cmdObject"/>
+            <Button CommandName="cmdPicture"/>
+          </Group>
+        </Tab>
+
+        <!-- ------------------------- VIEW ------------------------------- -->
+        <Tab CommandName="cmdTabView">
+          <Group CommandName="cmdGroupZoom" SizeDefinition="ThreeButtons">
+            <Button CommandName="cmdZoomIn"/>
+            <Button CommandName="cmdZoomOut"/>
+            <Button CommandName="cmdZoom100"/>
+          </Group>
+
+          <Group CommandName="cmdGroupShowHide" SizeDefinition="TwoButtons">
+            <CheckBox CommandName="cmdRuler"/>
+            <CheckBox CommandName="cmdStatusBar"/>
+          </Group>
+        </Tab>
+
+      </Ribbon.Tabs>
+    </Ribbon>
+  </Application.Views>
+</Application>
